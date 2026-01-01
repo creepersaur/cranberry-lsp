@@ -141,24 +141,8 @@ impl LanguageServer for CranberryLsp {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        self.client
-            .log_message(
-                MessageType::INFO,
-                format!(
-                    "[cranberry-lsp] File Changed: {}",
-                    PathBuf::from(params.text_document.uri.path())
-                        .to_str()
-                        .unwrap()
-                ),
-            )
-            .await;
-
         let content_changes = params.content_changes;
         let doc = params.text_document;
-
-        self.client
-            .log_message(MessageType::INFO, content_changes[0].text.clone())
-            .await;
 
         let mut file_manager = match self.file_manager.write() {
             Ok(fm) => fm,
