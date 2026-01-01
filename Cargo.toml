@@ -1,0 +1,18 @@
+[package]
+name = "cranberry-lsp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cranberry-lsp"
+path = "src/main.rs"
+
+[dependencies]
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+anyhow = "1"  # For error handling
+tree-sitter = "0.25"
+tree-sitter-cranberry = { path = "../tree-sitter-cranberry" }
+log = "0.4"
+env_logger = "0.10"
