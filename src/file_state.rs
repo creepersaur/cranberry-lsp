@@ -157,11 +157,7 @@ impl FileState {
     pub fn completion(&mut self) -> Vec<CompletionItem> {
         self.model.build_model(&self.tree, &self.source_code);
 
-        [
-            self.model.get_class_completion(),
-            self.model.get_function_completion(),
-        ]
-        .concat()
+        self.model.get_completion_symbols()
     }
 }
 
