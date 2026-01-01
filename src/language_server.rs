@@ -45,7 +45,7 @@ impl LanguageServer for CranberryLsp {
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
 						open_close: Some(false),
-                        change: Some(TextDocumentSyncKind::FULL),
+                        change: Some(TextDocumentSyncKind::INCREMENTAL),
                         will_save: Some(false),
                         will_save_wait_until: Some(false),
                         save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
@@ -168,7 +168,7 @@ impl LanguageServer for CranberryLsp {
         for change in content_changes {
             if let Some(file) = file_manager.get_file_mut(&doc.uri) {
                 match change.range {
-                    Some(range) => file.edit_file(change.text, range),
+                    Some(range) => file.edit_file(&change.text, Some(range)),
                     None => file.replace_all(change.text),
                 }
             }
