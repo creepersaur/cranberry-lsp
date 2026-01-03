@@ -3,9 +3,17 @@ use tower_lsp::lsp_types::{
 };
 use tree_sitter::{Node, Tree, TreeCursor};
 pub enum Symbol {
-    Class { name: String },
-    Function { name: String },
-    Variable { name: String },
+    Class {
+        name: String,
+        function_names: Vec<String>,
+    },
+    Function {
+        name: String,
+        args: Vec<String>,
+    },
+    Variable {
+        name: String,
+    },
 }
 
 #[derive(Default)]
@@ -50,7 +58,7 @@ impl LanguageModel {
 
         loop {
             let node = cursor.node();
-            Self::evaluate_node(&mut cursor, node, &mut self.global_scope, source_code);
+            Self::evaluate_node(node, &mut cursor, &mut self.global_scope, source_code);
 
             if !cursor.goto_next_sibling() {
                 break;
@@ -64,29 +72,48 @@ impl LanguageModel {
             .iter()
             .map(|symbol| match symbol {
                 Symbol::Variable { name } => CompletionItem {
-                    label: name.clone(),
+                    label: format!("⎔ {name}"),
                     kind: Some(CompletionItemKind::VARIABLE),
+					insert_text: Some(name.clone()),
                     ..Default::default()
                 },
 
-                Symbol::Function { name } => CompletionItem {
-                    label: name.clone(),
+                Symbol::Function { name, args } => CompletionItem {
+                    label: format!("⨐ {name}"),
                     kind: Some(CompletionItemKind::FUNCTION),
-                    detail: Some("()".to_string()),
+                    detail: Some(format!("({})", args.join(", "))),
                     insert_text: Some(format!("{}($0)", &name)),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
                     ..Default::default()
                 },
 
-                Symbol::Class { name } => CompletionItem {
-                    label: name.clone(),
+                Symbol::Class {
+                    name,
+                    function_names,
+                } => CompletionItem {
+                    label: format!("⊡ {name}"),
                     kind: Some(CompletionItemKind::CLASS),
                     detail: Some(String::from("class")),
                     documentation: Some(Documentation::MarkupContent(MarkupContent {
                         kind: MarkupKind::Markdown,
                         value: format!(
-                            "# Class `{}`\nConstruct this class using `{}()`\n```cb\nclass {} {}",
-                            &name, &name, &name, "{\n\n}"
+                            r#"# Class `{}`
+Construct this class using `{}()`
+```cb
+class {} {}
+	{}
+{}
+```"#,
+                            &name,
+                            &name,
+                            &name,
+                            "{",
+                            function_names
+                                .iter()
+                                .map(|x| format!("fn {}() {{ .... }}", x))
+                                .collect::<Vec<String>>()
+                                .join("\n"),
+                            "}",
                         ),
                     })),
                     ..Default::default()
@@ -112,8 +139,8 @@ impl LanguageModel {
     }
 
     pub fn evaluate_node<'a>(
-        cursor: &mut TreeCursor<'a>,
         node: Node<'a>,
+        cursor: &mut TreeCursor<'a>,
         scope: &mut Scope,
         source_code: &str,
     ) {
@@ -123,32 +150,41 @@ impl LanguageModel {
             "function_declaration" => {
                 let name = Self::get_field_text(node, "name", source_code);
 
-                scope.add_symbol(Symbol::Function { name });
+                let mut args = vec![];
+
+                if let Some(parameters) = Self::try_get_field(node, "parameters") {
+                    args = parameters
+                        .children_by_field_name("param", &mut parameters.walk())
+                        .map(|x| Self::get_text(x, source_code))
+                        .collect();
+                }
+
+                scope.add_symbol(Symbol::Function { name, args });
 
                 if let Some(block) = Self::try_get_field(node, "block") {
-                    cursor.goto_descendant(block.id());
-                    if !cursor.goto_first_child() {
-                        cursor.goto_parent();
-                        cursor.goto_parent();
-                        return;
-                    }
+                    let mut b_cursor = block.walk();
 
-                    let mut inner_scope = Scope {
-                        children: vec![],
-                        symbols: vec![],
-                    };
+                    if b_cursor.goto_first_child() {
+                        let mut inner_scope = Scope {
+                            children: vec![],
+                            symbols: vec![],
+                        };
 
-                    loop {
-                        Self::evaluate_node(cursor, cursor.node(), &mut inner_scope, source_code);
+                        loop {
+                            Self::evaluate_node(
+                                b_cursor.node(),
+                                &mut b_cursor,
+                                &mut inner_scope,
+                                source_code,
+                            );
 
-                        if !cursor.goto_next_sibling() {
-                            break;
+                            if !b_cursor.goto_next_sibling() {
+                                break;
+                            }
                         }
-                    }
 
-                    scope.add_child_scope(inner_scope);
-                    cursor.goto_parent();
-                    cursor.goto_parent();
+                        scope.add_child_scope(inner_scope);
+                    }
                 }
             }
 
@@ -161,6 +197,20 @@ impl LanguageModel {
                 for name in names {
                     scope.add_symbol(Symbol::Variable { name });
                 }
+            }
+
+            "class_definition" => {
+                let name = Self::get_field_text(node, "name", source_code);
+
+                let function_names: Vec<String> = node
+                    .children_by_field_name("method", cursor)
+                    .map(|x| Self::get_field_text(x, "name", source_code))
+                    .collect();
+
+                scope.add_symbol(Symbol::Class {
+                    name,
+                    function_names,
+                });
             }
 
             _ => return,
