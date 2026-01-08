@@ -1,11 +1,16 @@
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, Documentation, InsertTextFormat, MarkupContent, MarkupKind,
+    Position,
 };
 use tree_sitter::{Node, Tree, TreeCursor};
+
+#[derive(Debug)]
 pub enum Symbol {
     Class {
         name: String,
-        function_names: Vec<String>,
+        constructor: Option<Box<Symbol>>,
+        functions: Vec<Symbol>,
+        variables: Vec<Symbol>,
     },
     Function {
         name: String,
@@ -13,13 +18,17 @@ pub enum Symbol {
     },
     Variable {
         name: String,
+        optional_type: Option<String>,
+    },
+    Constructor {
+        args: Vec<String>,
     },
 }
 
 #[derive(Default)]
 pub struct Scope {
-    children: Vec<Scope>,
-    symbols: Vec<Symbol>,
+    pub children: Vec<Scope>,
+    pub symbols: Vec<Symbol>,
 }
 
 impl Scope {
@@ -33,7 +42,7 @@ impl Scope {
 }
 
 pub struct LanguageModel {
-    global_scope: Scope,
+    pub global_scope: Scope,
     source_code: String,
 }
 
@@ -66,20 +75,25 @@ impl LanguageModel {
         }
     }
 
-    pub fn get_completion_symbols(&mut self) -> Vec<CompletionItem> {
-        self.global_scope
+    pub fn get_completion_symbols(&mut self, scope: Option<&Scope>) -> Vec<CompletionItem> {
+        scope
+            .unwrap_or(&self.global_scope)
             .symbols
             .iter()
             .map(|symbol| match symbol {
-                Symbol::Variable { name } => CompletionItem {
-                    label: format!("⎔ {name}"),
+                Symbol::Variable {
+                    name,
+                    optional_type,
+                } => CompletionItem {
+                    label: name.clone(),
                     kind: Some(CompletionItemKind::VARIABLE),
-					insert_text: Some(name.clone()),
+                    detail: optional_type.clone(),
+                    insert_text: Some(name.clone()),
                     ..Default::default()
                 },
 
                 Symbol::Function { name, args } => CompletionItem {
-                    label: format!("⨐ {name}"),
+                    label: name.clone(),
                     kind: Some(CompletionItemKind::FUNCTION),
                     detail: Some(format!("({})", args.join(", "))),
                     insert_text: Some(format!("{}($0)", &name)),
@@ -89,37 +103,188 @@ impl LanguageModel {
 
                 Symbol::Class {
                     name,
-                    function_names,
+                    functions,
+                    variables,
+                    constructor,
                 } => CompletionItem {
-                    label: format!("⊡ {name}"),
+                    label: name.clone(),
                     kind: Some(CompletionItemKind::CLASS),
                     detail: Some(String::from("class")),
                     documentation: Some(Documentation::MarkupContent(MarkupContent {
                         kind: MarkupKind::Markdown,
                         value: format!(
                             r#"# Class `{}`
-Construct this class using `{}()`
+Construct this class using `{}({})`
 ```cb
-class {} {}
-	{}
+class {} {}{}{}{}
 {}
 ```"#,
                             &name,
                             &name,
+                            if let Some(constructor) = constructor {
+                                if let Symbol::Constructor { args } = constructor.as_ref() {
+                                    args[1..].join(", ")
+                                } else {
+                                    String::new()
+                                }
+                            } else {
+                                String::new()
+                            },
                             &name,
                             "{",
-                            function_names
-                                .iter()
-                                .map(|x| format!("fn {}() {{ .... }}", x))
-                                .collect::<Vec<String>>()
-                                .join("\n"),
+                            if let Some(constructor) = constructor {
+                                if let Symbol::Constructor { args } = constructor.as_ref() {
+                                    if variables.len() > 0 || functions.len() > 0 {
+                                        format!("\n\tconstructor({})\n", args.join(", "))
+                                    } else {
+                                        format!("\n\tconstructor({})", args.join(", "))
+                                    }
+                                } else {
+                                    String::new()
+                                }
+                            } else {
+                                String::new()
+                            },
+                            if variables.len() > 0 {
+                                format!(
+                                    "\n{}{}",
+                                    variables
+                                        .iter()
+                                        .map(|x| {
+                                            let Symbol::Variable {
+                                                name,
+                                                optional_type,
+                                            } = x
+                                            else {
+                                                unreachable!("non-function in functions vec");
+                                            };
+
+                                            format!(
+                                                "\tlet {name}{};",
+                                                if let Some(t) = optional_type {
+                                                    format!(": {t}")
+                                                } else {
+                                                    String::new()
+                                                }
+                                            )
+                                        })
+                                        .collect::<Vec<String>>()
+                                        .join("\n"),
+                                    if functions.len() > 0 { "\n" } else { "" }
+                                )
+                            } else {
+                                String::new()
+                            },
+                            if functions.len() > 0 {
+                                format!(
+                                    "\n{}",
+                                    functions
+                                        .iter()
+                                        .map(|x| {
+                                            let Symbol::Function { name, args } = x else {
+                                                unreachable!("non-function in functions vec");
+                                            };
+
+                                            format!(
+                                                "\tfn {} {{ .... }}",
+                                                format!("{name}({})", args.join(", "))
+                                            )
+                                        })
+                                        .collect::<Vec<String>>()
+                                        .join("\n")
+                                )
+                            } else {
+                                if variables.len() < 1 && constructor.is_none() {
+                                    "\n".to_string()
+                                } else {
+                                    String::new()
+                                }
+                            },
                             "}",
                         ),
                     })),
                     ..Default::default()
                 },
+
+                x => CompletionItem::new_simple(format!("{x:?}"), String::new()),
             })
             .collect()
+    }
+
+    pub fn get_member_symbols(&mut self, position: &Position) -> Vec<CompletionItem> {
+        let line = self
+            .source_code
+            .lines()
+            .nth(position.line as usize)
+            .unwrap();
+        let col = position.character as usize;
+        let dot_pos = col.saturating_sub(1);
+
+        // GO BACK AND GET OBJECT
+        let mut start = dot_pos;
+        while start > 0 {
+            let ch = line.as_bytes()[start - 1];
+            if !matches!(ch, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') {
+                break;
+            }
+            start -= 1;
+        }
+
+        let object = &line[start..dot_pos];
+        for i in self.global_scope.symbols.iter() {
+            if let Symbol::Class {
+                name,
+                functions,
+                variables,
+                ..
+            } = i
+            {
+                if name != object {
+                    continue;
+                }
+                let function_completion = functions
+                    .iter()
+                    .map(|x| match x {
+                        Symbol::Function { name, args } => CompletionItem {
+                            label: name.to_string(),
+                            kind: Some(CompletionItemKind::FUNCTION),
+                            detail: Some(format!("({})", args.join(", "))),
+                            insert_text: Some(format!("{name}($0)")),
+                            insert_text_format: Some(InsertTextFormat::SNIPPET),
+                            ..Default::default()
+                        },
+                        _ => CompletionItem {
+                            label: "NOT-FUNCTION".to_string(),
+                            ..Default::default()
+                        },
+                    })
+                    .collect::<Vec<_>>();
+
+                let variable_completion = variables
+                    .iter()
+                    .map(|x| match x {
+                        Symbol::Variable {
+                            name,
+                            optional_type,
+                        } => CompletionItem {
+                            label: name.to_string(),
+                            kind: Some(CompletionItemKind::VARIABLE),
+                            detail: optional_type.clone(),
+                            ..Default::default()
+                        },
+
+                        _ => CompletionItem {
+                            label: "NOT-VARIABLE".to_string(),
+                            ..Default::default()
+                        },
+                    })
+                    .collect();
+
+                return [variable_completion, function_completion].concat();
+            }
+        }
+
+        vec![]
     }
 
     pub fn get_field<'a>(node: Node<'a>, name: &'a str) -> Node<'a> {
@@ -136,6 +301,48 @@ class {} {}
 
     pub fn get_field_text<'a>(node: Node<'a>, name: &'a str, source_code: &str) -> String {
         Self::get_text(Self::get_field(node, name), source_code)
+    }
+
+    pub fn get_value_type<'a>(node: Node<'a>, source_code: &str, scope: &Scope) -> Option<String> {
+        match node.kind() {
+            "number" => Some("number".to_string()),
+            "string" => Some("string".to_string()),
+            "formatted_string" => Some("string".to_string()),
+            "boolean" => Some("bool".to_string()),
+            "nil" => Some("nil?".to_string()),
+            "call_expression" => {
+                let name_node = node.child_by_field_name("name").unwrap();
+                let mut cursor = name_node.walk();
+                cursor.goto_first_child();
+
+                if cursor.node().kind() == "pascal_case_identifier" {
+                    Some(Self::get_text(name_node, source_code))
+                } else {
+					Some("nil".to_string())
+				}
+            }
+
+			"identifier" => {
+				let mut cursor = node.walk();
+                cursor.goto_first_child();
+
+				let text = Self::get_text(node, source_code);
+				if cursor.node().kind() == "pascal_case_identifier" {
+                    Some(text)
+                } else {
+					for i in scope.symbols.iter() {
+						if let Symbol::Variable { optional_type, .. } = i {
+							return optional_type.clone();
+						} else if let Symbol::Function { .. } = i {
+							return Some("function".to_string())
+						}
+					}
+					None
+				}
+			}
+
+            _ => None,
+        }
     }
 
     pub fn evaluate_node<'a>(
@@ -188,28 +395,114 @@ class {} {}
                 }
             }
 
+            "constructor" => {
+                let mut args = vec![];
+
+                if let Some(parameters) = Self::try_get_field(node, "parameters") {
+                    args = parameters
+                        .children_by_field_name("param", &mut parameters.walk())
+                        .map(|x| Self::get_text(x, source_code))
+                        .collect();
+                }
+
+                scope.add_symbol(Symbol::Constructor { args });
+            }
+
             "let_statement" => {
+                let names: Vec<String> = node
+                    .children_by_field_name("name", &mut node.walk())
+                    .map(|x| Self::get_text(x, source_code))
+                    .collect();
+
+                let values: Vec<_> = node
+                    .children_by_field_name("value", &mut node.walk())
+                    .map(|x| Self::get_value_type(x, source_code, scope))
+                    .collect();
+
+                let optional_type = if let Some(t) = Self::try_get_field(node, "type") {
+                    Some(Self::get_text(t, source_code))
+                } else {
+                    None
+                };
+
+                if values.len() > 0 {
+                    for i in 0..names.len() {
+                        scope.add_symbol(Symbol::Variable {
+                            name: names[i].clone(),
+                            optional_type: values[i].clone().or(optional_type.clone()),
+                        });
+                    }
+                } else {
+                    for name in names {
+                        scope.add_symbol(Symbol::Variable {
+                            name,
+                            optional_type: optional_type.clone(),
+                        });
+                    }
+                }
+            }
+
+            "const_statement" => {
                 let names: Vec<String> = node
                     .children_by_field_name("name", cursor)
                     .map(|x| Self::get_text(x, source_code))
                     .collect();
 
+                let optional_type = if let Some(t) = Self::try_get_field(node, "type") {
+                    Some(Self::get_text(t, source_code))
+                } else {
+                    None
+                };
+
                 for name in names {
-                    scope.add_symbol(Symbol::Variable { name });
+                    scope.add_symbol(Symbol::Variable {
+                        name,
+                        optional_type: optional_type.clone(),
+                    });
                 }
             }
 
             "class_definition" => {
                 let name = Self::get_field_text(node, "name", source_code);
 
-                let function_names: Vec<String> = node
-                    .children_by_field_name("method", cursor)
-                    .map(|x| Self::get_field_text(x, "name", source_code))
-                    .collect();
+                let mut class_scope = Scope::default();
+                let mut variables = vec![];
+                let mut functions = vec![];
+                let mut constructor = None;
+
+                let mut class_cursor = node.walk();
+                class_cursor.goto_first_child();
+
+                if class_cursor.goto_next_sibling() {
+                    loop {
+                        Self::evaluate_node(
+                            class_cursor.node(),
+                            &mut class_cursor,
+                            &mut class_scope,
+                            source_code,
+                        );
+
+                        if !class_cursor.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+
+                for i in class_scope.symbols {
+                    match i {
+                        Symbol::Function { .. } => functions.push(i),
+                        Symbol::Variable { .. } => variables.push(i),
+                        Symbol::Constructor { .. } => constructor = Some(Box::new(i)),
+
+                        _ => {}
+                    }
+                }
 
                 scope.add_symbol(Symbol::Class {
                     name,
-                    function_names,
+                    constructor,
+                    functions,
+                    variables,
                 });
             }
 

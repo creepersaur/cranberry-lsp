@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::{CompletionItem, Range};
+use tower_lsp::lsp_types::{CompletionItem, Position, Range};
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 use tree_sitter_cranberry;
 
@@ -157,8 +157,14 @@ impl FileState {
     pub fn completion(&mut self) -> Vec<CompletionItem> {
         self.model.build_model(&self.tree, &self.source_code);
 
-        self.model.get_completion_symbols()
+        self.model.get_completion_symbols(None)
     }
+
+	pub fn member_access(&mut self, position: &Position) -> Vec<CompletionItem> {
+        self.model.build_model(&self.tree, &self.source_code);
+
+		self.model.get_member_symbols(position)
+	}
 }
 
 pub fn compute_line_starts(text: &str) -> Vec<usize> {

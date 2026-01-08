@@ -4,7 +4,7 @@ macro_rules! add_keyword {
         CompletionItem {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
-            detail: Some($description.to_string()),
+            documentation: Some(Documentation::String($description.to_string())),
             ..Default::default()
         }
     };

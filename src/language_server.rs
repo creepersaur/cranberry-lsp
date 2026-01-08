@@ -23,7 +23,7 @@ impl CranberryLsp {
                 let extra = vec![CompletionItem {
                     label: "self".to_string(),
                     kind: Some(CompletionItemKind::CLASS),
-                    detail: Some("class object".to_string()),
+					documentation: Some(Documentation::String("class object".to_string())),
                     ..Default::default()
                 }];
 
@@ -44,7 +44,7 @@ impl LanguageServer for CranberryLsp {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
-						open_close: Some(false),
+                        open_close: Some(false),
                         change: Some(TextDocumentSyncKind::INCREMENTAL),
                         will_save: Some(false),
                         will_save_wait_until: Some(false),
@@ -167,10 +167,24 @@ impl LanguageServer for CranberryLsp {
         };
 
         let doc = params.text_document_position.text_document;
+
         if let Some(file) = file_manager.get_file_mut(&doc.uri) {
-            return Ok(Some(CompletionResponse::Array(
-                [self.basic_completions.clone(), file.completion()].concat(),
-            )));
+            let completions = if let Some(context) = params.context {
+                if context.trigger_kind == CompletionTriggerKind::TRIGGER_CHARACTER
+                    && context.trigger_character.as_deref() == Some(".")
+                {
+                    // Extract receiver and get member completions
+                    file.member_access(&params.text_document_position.position)
+                } else {
+                    // Fallback to basic or file completions
+                    [self.basic_completions.clone(), file.completion()].concat()
+                }
+            } else {
+                // No context: general completion
+                [self.basic_completions.clone(), file.completion()].concat()
+            };
+
+            return Ok(Some(CompletionResponse::Array(completions)));
         }
 
         Ok(Some(CompletionResponse::Array(
