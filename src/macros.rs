@@ -68,8 +68,8 @@ macro_rules! add_all_keywords {
 macro_rules! add_all_builtin_functions {
     () => {
         vec![
-            add_function!("print", "(...)"),
             add_function!("println", "(...)"),
+            add_function!("print", "(...)"),
             add_function!("error", "(message)"),
             add_function!("format", "(...) -> string"),
             add_function!("typeof", "(value, internal?) -> string"),

@@ -154,17 +154,22 @@ impl FileState {
         }
     }
 
-    pub fn completion(&mut self) -> Vec<CompletionItem> {
+    pub fn completion(&mut self, position: &Position) -> Vec<CompletionItem> {
         self.model.build_model(&self.tree, &self.source_code);
 
-        self.model.get_completion_symbols(None)
+        let scope = {
+            self.model
+                .accumulate_cursor_scope(&self.line_starts, &self.source_code, position)
+        };
+
+        self.model.get_completion_symbols(scope)
     }
 
-	pub fn member_access(&mut self, position: &Position) -> Vec<CompletionItem> {
+    pub fn member_access(&mut self, position: &Position) -> Vec<CompletionItem> {
         self.model.build_model(&self.tree, &self.source_code);
 
-		self.model.get_member_symbols(position)
-	}
+        self.model.get_member_symbols(position)
+    }
 }
 
 pub fn compute_line_starts(text: &str) -> Vec<usize> {
@@ -223,10 +228,11 @@ pub fn byte_offset_to_point(text: &str, line_starts: &[usize], byte_offset: usiz
 
     // binary search: find greatest index i where line_starts[i] <= byte_offset
     let line = match line_starts.binary_search(&byte_offset) {
-        Ok(i) => i,                 // exact match: start of a line
-        Err(0) => 0,                // before the first start (shouldn't happen if first = 0)
-        Err(i) => i - 1,            // belongs to previous line
-    }.min(line_starts.len() - 1);
+        Ok(i) => i,      // exact match: start of a line
+        Err(0) => 0,     // before the first start (shouldn't happen if first = 0)
+        Err(i) => i - 1, // belongs to previous line
+    }
+    .min(line_starts.len() - 1);
 
     let line_start = line_starts[line];
     let column = byte_offset.saturating_sub(line_start);

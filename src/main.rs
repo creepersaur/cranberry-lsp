@@ -7,6 +7,7 @@ mod file_state;
 mod language_model;
 mod language_server;
 mod macros;
+mod logger;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

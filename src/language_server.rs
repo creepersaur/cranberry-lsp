@@ -1,9 +1,9 @@
 use crate::{
     add_all_builtin_functions, add_all_keywords, add_all_type_casts, add_function, add_keyword,
-    add_type_cast, file_manager::FileManager,
+    add_type_cast, file_manager::FileManager, logger::LspLogger,
 };
 use std::{path::PathBuf, sync::RwLock};
-use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer};
+use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
 
 pub struct CranberryLsp {
     client: Client,
@@ -23,7 +23,7 @@ impl CranberryLsp {
                 let extra = vec![CompletionItem {
                     label: "self".to_string(),
                     kind: Some(CompletionItemKind::CLASS),
-					documentation: Some(Documentation::String("class object".to_string())),
+                    documentation: Some(Documentation::String("class object".to_string())),
                     ..Default::default()
                 }];
 
@@ -40,11 +40,17 @@ impl LanguageServer for CranberryLsp {
             .log_message(MessageType::INFO, "Initialized cranberry-lsp")
             .await;
 
+        log::set_boxed_logger(Box::new(LspLogger {
+            client: self.client.clone(),
+        }))
+        .unwrap();
+        log::set_max_level(log::LevelFilter::Info);
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
-                        open_close: Some(false),
+                        open_close: Some(true),
                         change: Some(TextDocumentSyncKind::INCREMENTAL),
                         will_save: Some(false),
                         will_save_wait_until: Some(false),
@@ -167,6 +173,7 @@ impl LanguageServer for CranberryLsp {
         };
 
         let doc = params.text_document_position.text_document;
+		let position = params.text_document_position.position;
 
         if let Some(file) = file_manager.get_file_mut(&doc.uri) {
             let completions = if let Some(context) = params.context {
@@ -174,14 +181,14 @@ impl LanguageServer for CranberryLsp {
                     && context.trigger_character.as_deref() == Some(".")
                 {
                     // Extract receiver and get member completions
-                    file.member_access(&params.text_document_position.position)
+                    file.member_access(&position)
                 } else {
                     // Fallback to basic or file completions
-                    [self.basic_completions.clone(), file.completion()].concat()
+                    [file.completion(&position), self.basic_completions.clone()].concat()
                 }
             } else {
                 // No context: general completion
-                [self.basic_completions.clone(), file.completion()].concat()
+                [file.completion(&position), self.basic_completions.clone()].concat()
             };
 
             return Ok(Some(CompletionResponse::Array(completions)));
