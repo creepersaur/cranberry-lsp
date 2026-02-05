@@ -2,7 +2,7 @@ use crate::{
     add_all_builtin_functions, add_all_keywords, add_all_type_casts, add_function, add_keyword,
     add_type_cast, file_manager::FileManager, logger::LspLogger,
 };
-use std::{path::PathBuf, sync::RwLock};
+use std::{collections::HashSet, path::PathBuf, sync::RwLock};
 use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
 
 pub struct CranberryLsp {
@@ -20,12 +20,7 @@ impl CranberryLsp {
                 let keywords = add_all_keywords!();
                 let builtins = add_all_builtin_functions!();
                 let type_casts = add_all_type_casts!();
-                let extra = vec![CompletionItem {
-                    label: "self".to_string(),
-                    kind: Some(CompletionItemKind::CLASS),
-                    documentation: Some(Documentation::String("class object".to_string())),
-                    ..Default::default()
-                }];
+                let extra = vec![];
 
                 [keywords, builtins, type_casts, extra].concat()
             },
@@ -35,7 +30,7 @@ impl CranberryLsp {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for CranberryLsp {
-    async fn initialize(&self, _params: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         self.client
             .log_message(MessageType::INFO, "Initialized cranberry-lsp")
             .await;
@@ -46,8 +41,61 @@ impl LanguageServer for CranberryLsp {
         .unwrap();
         log::set_max_level(log::LevelFilter::Info);
 
+        let root_uri = if let Some(folders) = params.workspace_folders.as_ref() {
+            folders.first().map(|f| f.uri.clone())
+        } else {
+            params.root_uri.clone()
+        };
+
+        if let Some(uri) = root_uri {
+            let path = uri.to_file_path().unwrap();
+            let mut file_manager = match self.file_manager.write() {
+                Ok(fm) => fm,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            file_manager.set_root(path);
+            file_manager.scan_src();
+        }
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
+                workspace: Some(WorkspaceServerCapabilities {
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        did_create: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some("file".to_string()),
+                                pattern: FileOperationPattern {
+                                    glob: "**/*.cb".to_string(),
+                                    matches: None,
+                                    options: None,
+                                },
+                            }],
+                        }),
+
+                        // did_change: Some(FileOperationRegistrationOptions {
+                        //     filters: vec![FileOperationFilter {
+                        //         scheme: Some("file".to_string()),
+                        //         pattern: FileOperationPattern {
+                        //             glob: "**/*.cb".to_string(),
+                        //             matches: None,
+                        //             options: None,
+                        //         },
+                        //     }],
+                        // }),
+                        did_delete: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some("file".to_string()),
+                                pattern: FileOperationPattern {
+                                    glob: "**/*.cb".to_string(),
+                                    matches: None,
+                                    options: None,
+                                },
+                            }],
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
                         open_close: Some(true),
@@ -61,6 +109,7 @@ impl LanguageServer for CranberryLsp {
                 )),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".".to_string()]),
+                    resolve_provider: Some(true),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -71,6 +120,13 @@ impl LanguageServer for CranberryLsp {
             }),
         })
     }
+
+    // workspace: Some(WorkspaceClientCapabilities {
+    //             did_change_watched_files: Some(DidChangeWatchedFilesClientCapabilities {
+    //                 dynamic_registration: Some(false),
+    //                 ..Default::default()
+    //             }),
+    //         }),
 
     async fn shutdown(&self) -> Result<()> {
         Ok(())
@@ -173,7 +229,17 @@ impl LanguageServer for CranberryLsp {
         };
 
         let doc = params.text_document_position.text_document;
-		let position = params.text_document_position.position;
+        let position = params.text_document_position.position;
+
+        let mut other_file_completions = vec![];
+
+        for file in file_manager.get_files() {
+            for x in file.completion(&Position::new(0, 0)) {
+                if file.uri != doc.uri {
+                    other_file_completions.push(x);
+                }
+            }
+        }
 
         if let Some(file) = file_manager.get_file_mut(&doc.uri) {
             let completions = if let Some(context) = params.context {
@@ -181,21 +247,79 @@ impl LanguageServer for CranberryLsp {
                     && context.trigger_character.as_deref() == Some(".")
                 {
                     // Extract receiver and get member completions
-                    file.member_access(&position)
+                    let object = file.get_member_object(&file.source_code, &position);
+                    let members = file.member_access(&object);
+
+                    if members.is_empty() {
+						let old_file_uri = file.uri.clone();
+                        let mut other_file_members = vec![];
+
+                        for other in file_manager.get_files() {
+                            for x in other.member_access(&object) {
+                                if old_file_uri != doc.uri {
+                                    other_file_members.push(x);
+                                }
+                            }
+                        }
+
+                        other_file_members
+                    } else {
+                        members
+                    }
                 } else {
+                    let mut seen = HashSet::new();
+                    let filtered = [file.completion(&position), other_file_completions]
+                        .concat()
+                        .into_iter()
+                        .filter(|comp| seen.insert(comp.label.clone()))
+                        .collect();
+
                     // Fallback to basic or file completions
-                    [file.completion(&position), self.basic_completions.clone()].concat()
+                    [filtered, self.basic_completions.clone()].concat()
                 }
             } else {
+                let mut seen = HashSet::new();
+                let filtered = [file.completion(&position), other_file_completions]
+                    .concat()
+                    .into_iter()
+                    .filter(|comp| seen.insert(comp.label.clone()))
+                    .collect();
+
                 // No context: general completion
-                [file.completion(&position), self.basic_completions.clone()].concat()
+                [filtered, self.basic_completions.clone()].concat()
             };
 
-            return Ok(Some(CompletionResponse::Array(completions)));
+            let mut seen = HashSet::new();
+            let filtered = completions
+                .into_iter()
+                .filter(|comp| seen.insert(comp.label.clone()))
+                .collect();
+
+            return Ok(Some(CompletionResponse::Array(filtered)));
         }
 
+        let mut seen = HashSet::new();
+        let filtered = other_file_completions
+            .into_iter()
+            .filter(|comp| seen.insert(comp.label.clone()))
+            .collect();
+
         Ok(Some(CompletionResponse::Array(
-            self.basic_completions.clone(),
+            [filtered, self.basic_completions.clone()].concat(),
         )))
+    }
+
+    async fn completion_resolve(&self, mut completion: CompletionItem) -> Result<CompletionItem> {
+        // log::info!("completion_resolve CALLED");
+        if let Some(data) = &completion.data {
+            if let Some(doc) = data.get("doc") {
+                completion.documentation = Some(Documentation::MarkupContent(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: doc.as_str().unwrap().to_string(),
+                }));
+            }
+        }
+
+        Ok(completion)
     }
 }

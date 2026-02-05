@@ -4,7 +4,11 @@ macro_rules! add_keyword {
         CompletionItem {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
-            documentation: Some(Documentation::String($description.to_string())),
+			detail: Some($description.to_string()),
+			// label_details: Some(CompletionItemLabelDetails {
+			// 	detail: None,
+			// 	description: Some($description.to_string()),
+			// }),
             ..Default::default()
         }
     };
@@ -16,7 +20,11 @@ macro_rules! add_function {
         CompletionItem {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::FUNCTION),
-            detail: Some($details.to_string()),
+			detail: Some("fn print(value: any)".into()),
+            label_details: Some(CompletionItemLabelDetails {
+				detail: Some($details.to_string()),
+				description: None,
+			}),
             insert_text: Some(format!("{}($0)", $name)),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
@@ -30,7 +38,11 @@ macro_rules! add_type_cast {
         CompletionItem {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::CLASS),
-            detail: Some($details.to_string()),
+			detail: Some($details.to_string()),
+			// label_details: Some(CompletionItemLabelDetails {
+			// 	detail: Some($details.to_string()),
+			// 	description: None,
+			// }),
             insert_text: Some(format!("{}($0)", $name)),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
@@ -58,7 +70,7 @@ macro_rules! add_all_keywords {
             add_keyword!("break", "break value?"),
             add_keyword!("out", "output value?"),
             add_keyword!("continue", "continue iteration"),
-            add_keyword!("switch", "match statement"),
+            add_keyword!("match", "match statement"),
             add_keyword!("in", "in <iteratable>"),
         ]
     };

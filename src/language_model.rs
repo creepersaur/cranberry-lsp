@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
+use serde_json::json;
 use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, Documentation, InsertTextFormat, MarkupContent, MarkupKind,
-    Position,
+    CompletionItem, CompletionItemKind, CompletionItemLabelDetails, Documentation,
+    InsertTextFormat, Position,
 };
 use tree_sitter::{Node, Tree, TreeCursor};
 
@@ -118,11 +119,7 @@ impl LanguageModel {
                             } => CompletionItem {
                                 label: name.clone(),
                                 kind: Some(CompletionItemKind::VARIABLE),
-                                documentation: if let Some(optional_type) = optional_type {
-                                    Some(Documentation::String(optional_type.clone()))
-                                } else {
-                                    None
-                                },
+                                detail: optional_type.clone(),
                                 insert_text: Some(name.clone()),
                                 ..Default::default()
                             },
@@ -130,7 +127,10 @@ impl LanguageModel {
                             Symbol::Function { name, args } => CompletionItem {
                                 label: name.clone(),
                                 kind: Some(CompletionItemKind::FUNCTION),
-                                detail: Some(format!("({})", args.join(", "))),
+                                label_details: Some(CompletionItemLabelDetails {
+                                    detail: Some(format!("({})", args.join(", "))),
+                                    description: None,
+                                }),
                                 insert_text: Some(format!("{}($0)", &name)),
                                 insert_text_format: Some(InsertTextFormat::SNIPPET),
                                 ..Default::default()
@@ -145,16 +145,22 @@ impl LanguageModel {
                                 label: name.clone(),
                                 kind: Some(CompletionItemKind::CLASS),
                                 detail: Some(String::from("class")),
-                                documentation: Some(Documentation::MarkupContent(MarkupContent {
-                                    kind: MarkupKind::Markdown,
-                                    value: format!(
-                                        r#"# Class `{}`
-Construct this class using `{}({})`
-```cb
+                                data: Some(json!({
+                                    "doc": format!(
+                                        r#"Construct this class using `{}({})`
+```cranberry
+let my_object = {}( ... )
+```
+
+## Declaration:
+
+```cranberry
 class {} {}{}{}{}
-{}
-```"#,
-                                        &name,
+}}
+```
+
+[Learn More](https://creepersaur.github.io/CranberryDocs/basic_topics/classes/)
+"#,
                                         &name,
                                         if let Some(constructor) = constructor {
                                             if let Symbol::Constructor { args } =
@@ -167,6 +173,7 @@ class {} {}{}{}{}
                                         } else {
                                             String::new()
                                         },
+                                        &name,
                                         &name,
                                         "{",
                                         if let Some(constructor) = constructor {
@@ -247,7 +254,6 @@ class {} {}{}{}{}
                                                 String::new()
                                             }
                                         },
-                                        "}",
                                     ),
                                 })),
                                 ..Default::default()
@@ -273,7 +279,20 @@ class {} {}{}{}{}
                 Symbol::Function { name, args } => CompletionItem {
                     label: name.to_string(),
                     kind: Some(CompletionItemKind::FUNCTION),
-                    detail: Some(format!("({})", args.join(", "))),
+                    label_details: Some(CompletionItemLabelDetails {
+                        detail: Some(format!(
+                            "({})",
+                            args.iter()
+                                .filter_map(|x| if *x != "self" {
+                                    Some(x.to_string())
+                                } else {
+                                    None
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        )),
+                        description: None,
+                    }),
                     insert_text: Some(format!("{name}($0)")),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
                     ..Default::default()
@@ -312,26 +331,7 @@ class {} {}{}{}{}
         return [variable_completion, function_completion].concat();
     }
 
-    pub fn get_member_symbols(&mut self, position: &Position) -> Vec<CompletionItem> {
-        let line = self
-            .source_code
-            .lines()
-            .nth(position.line as usize)
-            .unwrap();
-        let col = position.character as usize;
-        let dot_pos = col.saturating_sub(1);
-
-        // GO BACK AND GET OBJECT
-        let mut start = dot_pos;
-        while start > 0 {
-            let ch = line.as_bytes()[start - 1];
-            if !matches!(ch, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') {
-                break;
-            }
-            start -= 1;
-        }
-
-        let object = &line[start..dot_pos];
+    pub fn get_member_symbols(&mut self, object: &str) -> Vec<CompletionItem> {
         for i in self.global_scope.symbols.iter() {
             if let Symbol::Class {
                 name,
@@ -447,8 +447,6 @@ class {} {}{}{}{}
                         .collect();
                 }
 
-                scope.add_symbol(Symbol::Function { name, args });
-
                 if let Some(block) = Self::try_get_field(node, "block") {
                     let mut b_cursor = block.walk();
 
@@ -457,6 +455,13 @@ class {} {}{}{}{}
 
                     if b_cursor.goto_first_child() && b_cursor.goto_first_child() {
                         let mut inner_scope = Scope::new(start, end);
+
+                        for i in args.iter() {
+                            inner_scope.add_symbol(Symbol::Variable {
+                                name: i.clone(),
+                                optional_type: None,
+                            });
+                        }
 
                         loop {
                             Self::evaluate_node(
@@ -474,6 +479,8 @@ class {} {}{}{}{}
                         scope.add_child_scope(inner_scope);
                     }
                 }
+
+                scope.add_symbol(Symbol::Function { name, args });
             }
 
             "constructor" => {
@@ -487,6 +494,10 @@ class {} {}{}{}{}
                 }
 
                 scope.add_symbol(Symbol::Constructor { args });
+
+                if let Some(block) = Self::try_get_field(node, "block") {
+                    scope.add_child_scope(Scope::new(block.start_byte(), block.end_byte()));
+                }
             }
 
             "const_statement" | "let_statement" => {
@@ -578,6 +589,47 @@ class {} {}{}{}{}
                 });
             }
 
+            "explicit_scope" => {
+                if let Some(block) = Self::try_get_field(node, "block") {
+                    let mut b_cursor = block.walk();
+
+                    let start = b_cursor.node().start_byte();
+                    let end = b_cursor.node().end_byte();
+
+                    if b_cursor.goto_first_child() {
+                        let mut inner_scope = Scope::new(start, end);
+
+                        loop {
+                            Self::evaluate_node(
+                                b_cursor.node(),
+                                &mut b_cursor,
+                                &mut inner_scope,
+                                source_code,
+                            );
+
+                            if !b_cursor.goto_next_sibling() {
+                                break;
+                            }
+                        }
+
+                        scope.add_child_scope(inner_scope);
+                    }
+                }
+            }
+
+            "for_statement" => {
+                if let Some(block) = Self::try_get_field(node, "block") {
+                    let mut inner_scope = Scope::new(block.start_byte(), block.end_byte());
+
+                    inner_scope.add_symbol(Symbol::Variable {
+                        name: Self::get_field_text(node, "var", source_code),
+                        optional_type: None,
+                    });
+
+                    scope.add_child_scope(inner_scope);
+                }
+            }
+
             _ => return,
         }
     }
@@ -645,17 +697,22 @@ class {} {}{}{}{}
             if let Some(scope) =
                 self.accumulate_inner_scope_from_byte(&self.global_scope, pos, &mut scope_path)
             {
-                scope_path.push(scope);
+                // Push the innermost containing scope too, but only if autocomplete isn't disabled.
+                if !scope.disable_autocomplete {
+                    scope_path.push(scope);
+                }
             } else {
+                // fallback to global scope when nothing matched
                 scope_path.push(&self.global_scope);
             }
         } else {
             scope_path.push(&self.global_scope);
         }
 
+        // remove duplicate scopes (by start,end)
         let mut seen = HashSet::new();
         scope_path.retain(|scope| {
-            let key = (scope.start, scope.end); // example key
+            let key = (scope.start, scope.end);
             seen.insert(key)
         });
 
@@ -668,29 +725,33 @@ class {} {}{}{}{}
         position_byte: usize,
         scope_path: &mut Vec<&'a Scope>,
     ) -> Option<&'a Scope> {
+        // Only proceed if this scope actually contains the position
         if scope.start <= position_byte && scope.end > position_byte {
             for child in scope.children.iter() {
-                if let Some(scope) =
+                // recurse: only children that contain `position_byte` will return Some(child_scope)
+                if let Some(child_scope) =
                     self.accumulate_inner_scope_from_byte(child, position_byte, scope_path)
                 {
-                    if !scope.disable_autocomplete {
-                        scope_path.push(scope);
+                    // we want the containing child scopes to be visible (unless disabled)
+                    if !child_scope.disable_autocomplete {
+                        scope_path.push(child_scope);
                     }
                 }
             }
+
+            // return this scope (the caller will decide whether to push it)
+            return Some(scope);
         }
 
-        if !scope.disable_autocomplete {
-            scope_path.push(scope);
-        }
-        Some(scope)
+        // not in this scope
+        None
     }
 }
 
 #[allow(unused)]
 fn format_sexp(sexp: &str) -> String {
     let mut out = String::new();
-    let mut indent = 0;
+    let mut indent: i32 = 0;
     let mut newline = false;
 
     for c in sexp.chars() {
@@ -698,7 +759,7 @@ fn format_sexp(sexp: &str) -> String {
             '(' => {
                 if newline {
                     out.push('\n');
-                    out.push_str(&"  ".repeat(indent));
+                    out.push_str(&"  ".repeat(indent as usize));
                 }
                 out.push('(');
                 indent += 1;
@@ -715,7 +776,7 @@ fn format_sexp(sexp: &str) -> String {
             _ => {
                 if newline {
                     out.push('\n');
-                    out.push_str(&"  ".repeat(indent));
+                    out.push_str(&"  ".repeat(indent as usize));
                     newline = false;
                 }
                 out.push(c);

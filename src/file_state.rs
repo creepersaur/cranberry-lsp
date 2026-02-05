@@ -1,19 +1,23 @@
-use tower_lsp::lsp_types::{CompletionItem, Position, Range};
+use tower_lsp::lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionItemLabelDetails, Position, Range, Url,
+};
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 use tree_sitter_cranberry;
 
 use crate::language_model::LanguageModel;
 
+#[allow(unused)]
 pub struct FileState {
     parser: Parser,
-    source_code: String,
+    pub uri: Url,
+    pub source_code: String,
     tree: Tree,
     line_starts: Vec<usize>,
     model: LanguageModel,
 }
 
 impl FileState {
-    pub fn new(source_code: String) -> Self {
+    pub fn new(source_code: String, uri: Url) -> Self {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_cranberry::LANGUAGE.into())
@@ -29,6 +33,7 @@ impl FileState {
             parser,
             model,
             tree,
+            uri,
         }
     }
 
@@ -162,13 +167,51 @@ impl FileState {
                 .accumulate_cursor_scope(&self.line_starts, &self.source_code, position)
         };
 
-        self.model.get_completion_symbols(scope)
+        let items = self.model.get_completion_symbols(scope);
+
+        items
+            .iter()
+            .map(|x| {
+                if x.label == "self" {
+                    CompletionItem {
+                        label: "self".to_string(),
+                        kind: Some(CompletionItemKind::CLASS),
+                        label_details: Some(CompletionItemLabelDetails {
+                            detail: None,
+                            description: Some("class object".to_string()),
+                        }),
+                        ..Default::default()
+                    }
+                } else {
+                    x.clone()
+                }
+            })
+			.rev()
+            .collect()
     }
 
-    pub fn member_access(&mut self, position: &Position) -> Vec<CompletionItem> {
+    pub fn member_access(&mut self, object: &str) -> Vec<CompletionItem> {
         self.model.build_model(&self.tree, &self.source_code);
 
-        self.model.get_member_symbols(position)
+        self.model.get_member_symbols(object)
+    }
+
+    pub fn get_member_object(&self, source_code: &str, position: &Position) -> String {
+        let line = source_code.lines().nth(position.line as usize).unwrap();
+        let col = position.character as usize;
+        let dot_pos = col.saturating_sub(1);
+
+        // GO BACK AND GET OBJECT
+        let mut start = dot_pos;
+        while start > 0 {
+            let ch = line.as_bytes()[start - 1];
+            if !matches!(ch, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') {
+                break;
+            }
+            start -= 1;
+        }
+
+        line[start..dot_pos].to_string()
     }
 }
 
