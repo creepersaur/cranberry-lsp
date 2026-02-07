@@ -80,10 +80,10 @@ impl LanguageModel {
         }
     }
 
-	pub fn clear(&mut self) {
-		self.global_scope.children.clear();
+    pub fn clear(&mut self) {
+        self.global_scope.children.clear();
         self.global_scope.symbols.clear();
-	}
+    }
 
     pub fn build_model(&mut self, tree: &Tree, source_code: &str) {
         self.global_scope.end = tree.root_node().end_byte();
@@ -472,11 +472,11 @@ class {} {}{}{}{}
                         && name == &object_type
                     {
                         // Now check what kind of member access this is
-						let mut expr_type = "normal";
+                        let mut expr_type = "normal";
 
                         let member_name = if member.kind() == "call_expression" {
                             // hello.world()
-							expr_type = "call";
+                            expr_type = "call";
                             let method_name_node = member.child_by_field_name("name")?;
                             Self::get_text(method_name_node, source_code)
                         } else {
@@ -486,14 +486,22 @@ class {} {}{}{}{}
 
                         // Search for the member in functions
                         for func in functions {
-                            if let Symbol::Function { name, returns, .. } = func
+                            if let Symbol::Function {
+                                name,
+                                args,
+                                returns,
+                            } = func
                                 && name == &member_name
                             {
-								if expr_type == "call" {
-									return returns.clone().or(Some("nil".to_string()));
-								} else {
-									return Some("function".to_string())
-								}
+                                if expr_type == "call" {
+                                    return returns.clone().or(Some("nil".to_string()));
+                                } else {
+                                    return Some(format!(
+                                        "function: ({}) -> {}",
+                                        args.join(", "),
+                                        if let Some(r) = returns { r } else { "???" }
+                                    ));
+                                }
                             }
                         }
 
