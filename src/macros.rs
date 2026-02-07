@@ -4,11 +4,11 @@ macro_rules! add_keyword {
         CompletionItem {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
-			detail: Some($description.to_string()),
-			// label_details: Some(CompletionItemLabelDetails {
-			// 	detail: None,
-			// 	description: Some($description.to_string()),
-			// }),
+            detail: Some($description.to_string()),
+            // label_details: Some(CompletionItemLabelDetails {
+            // 	detail: None,
+            // 	description: Some($description.to_string()),
+            // }),
             ..Default::default()
         }
     };
@@ -20,11 +20,11 @@ macro_rules! add_function {
         CompletionItem {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::FUNCTION),
-			detail: Some($details.to_string()),
+            detail: Some($details.to_string()),
             label_details: Some(CompletionItemLabelDetails {
-				detail: Some($details.to_string()),
-				description: None,
-			}),
+                detail: Some($details.to_string()),
+                description: None,
+            }),
             insert_text: Some(format!("{}($0)", $name)),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
@@ -38,11 +38,11 @@ macro_rules! add_type_cast {
         CompletionItem {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::CLASS),
-			detail: Some($details.to_string()),
-			// label_details: Some(CompletionItemLabelDetails {
-			// 	detail: Some($details.to_string()),
-			// 	description: None,
-			// }),
+            detail: Some($details.to_string()),
+            // label_details: Some(CompletionItemLabelDetails {
+            // 	detail: Some($details.to_string()),
+            // 	description: None,
+            // }),
             insert_text: Some(format!("{}($0)", $name)),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
@@ -83,7 +83,7 @@ macro_rules! add_all_builtin_functions {
             add_function!("println", "(...)"),
             add_function!("print", "(...)"),
             add_function!("error", "(message)"),
-            add_function!("assert", "(message)"),
+            add_function!("assert", "(condition, message...)"),
             add_function!("format", "(...) -> string"),
             add_function!("typeof", "(value, internal?) -> string"),
             add_function!("pcall", "(fn, ...) -> (bool, data)"),
