@@ -63,7 +63,12 @@ impl FileManager {
         self.files.insert(url.clone(), FileState::new(text, url));
     }
 
+	#[allow(unused)]
     pub fn close_file(&mut self, url: Url) {
+        // self.files.remove(&url);
+    }
+
+	pub fn delete_file(&mut self, url: Url) {
         self.files.remove(&url);
     }
 

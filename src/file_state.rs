@@ -186,7 +186,7 @@ impl FileState {
                     x.clone()
                 }
             })
-			.rev()
+            .rev()
             .collect()
     }
 
@@ -212,6 +212,27 @@ impl FileState {
         }
 
         line[start..dot_pos].to_string()
+    }
+
+    pub fn get_static_member_object(&self, source_code: &str, position: &Position) -> String {
+        let line = source_code.lines().nth(position.line as usize).unwrap();
+        let col = position.character as usize;
+        let dot_pos = col.saturating_sub(1);
+
+        // GO BACK AND GET OBJECT
+        if &line[dot_pos - 1..dot_pos] != ":" {
+            return String::new();
+        }
+        let mut start = dot_pos - 1;
+        while start > 0 {
+            let ch = line.as_bytes()[start - 1];
+            if !matches!(ch, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') {
+                break;
+            }
+            start -= 1;
+        }
+
+        line[start..dot_pos - 1].to_string()
     }
 }
 

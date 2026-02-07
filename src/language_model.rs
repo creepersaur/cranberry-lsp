@@ -166,7 +166,7 @@ class {} {}{}{}{}
                                             if let Symbol::Constructor { args } =
                                                 constructor.as_ref()
                                             {
-                                                args[1..].join(", ")
+                                                args.join(", ")
                                             } else {
                                                 String::new()
                                             }

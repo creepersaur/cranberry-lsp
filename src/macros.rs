@@ -20,7 +20,7 @@ macro_rules! add_function {
         CompletionItem {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::FUNCTION),
-			detail: Some("fn print(value: any)".into()),
+			detail: Some($details.to_string()),
             label_details: Some(CompletionItemLabelDetails {
 				detail: Some($details.to_string()),
 				description: None,
@@ -83,6 +83,7 @@ macro_rules! add_all_builtin_functions {
             add_function!("println", "(...)"),
             add_function!("print", "(...)"),
             add_function!("error", "(message)"),
+            add_function!("assert", "(message)"),
             add_function!("format", "(...) -> string"),
             add_function!("typeof", "(value, internal?) -> string"),
             add_function!("pcall", "(fn, ...) -> (bool, data)"),

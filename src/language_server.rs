@@ -2,8 +2,13 @@ use crate::{
     add_all_builtin_functions, add_all_keywords, add_all_type_casts, add_function, add_keyword,
     add_type_cast, file_manager::FileManager, logger::LspLogger,
 };
-use std::{collections::HashSet, path::PathBuf, sync::RwLock};
-use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
+use std::{collections::HashSet, path::PathBuf};
+use tokio::sync::RwLock;
+use tower_lsp::{
+    Client, LanguageServer,
+    jsonrpc::Result,
+    lsp_types::*,
+};
 
 pub struct CranberryLsp {
     client: Client,
@@ -49,10 +54,7 @@ impl LanguageServer for CranberryLsp {
 
         if let Some(uri) = root_uri {
             let path = uri.to_file_path().unwrap();
-            let mut file_manager = match self.file_manager.write() {
-                Ok(fm) => fm,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut file_manager = self.file_manager.write().await;
             file_manager.set_root(path);
             file_manager.scan_src();
         }
@@ -108,7 +110,7 @@ impl LanguageServer for CranberryLsp {
                     },
                 )),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".".to_string()]),
+                    trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
                     resolve_provider: Some(true),
                     ..Default::default()
                 }),
@@ -145,10 +147,7 @@ impl LanguageServer for CranberryLsp {
             )
             .await;
 
-        let mut file_manager = match self.file_manager.write() {
-            Ok(fm) => fm,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut file_manager = self.file_manager.write().await;
         let doc = params.text_document;
 
         file_manager.open_file(doc.uri, doc.text);
@@ -167,13 +166,28 @@ impl LanguageServer for CranberryLsp {
             )
             .await;
 
-        let mut file_manager = match self.file_manager.write() {
-            Ok(fm) => fm,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut file_manager = self.file_manager.write().await;
         let doc = params.text_document;
 
         file_manager.close_file(doc.uri);
+    }
+
+    async fn did_delete_files(&self, params: DeleteFilesParams) {
+        for file in params.files {
+            let mut file_manager = self.file_manager.write().await;
+
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!(
+                        "[cranberry-lsp] File Deleted: {}",
+                        PathBuf::from(&file.uri).to_str().unwrap()
+                    ),
+                )
+                .await;
+
+            file_manager.delete_file(Url::from_file_path(file.uri).unwrap());
+        }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -189,10 +203,7 @@ impl LanguageServer for CranberryLsp {
             )
             .await;
 
-        let mut file_manager = match self.file_manager.write() {
-            Ok(fm) => fm,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut file_manager = self.file_manager.write().await;
         let doc = params.text_document;
 
         if let Some(file) = file_manager.get_file_mut(&doc.uri) {
@@ -206,10 +217,7 @@ impl LanguageServer for CranberryLsp {
         let content_changes = params.content_changes;
         let doc = params.text_document;
 
-        let mut file_manager = match self.file_manager.write() {
-            Ok(fm) => fm,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut file_manager = self.file_manager.write().await;
 
         for change in content_changes {
             if let Some(file) = file_manager.get_file_mut(&doc.uri) {
@@ -223,10 +231,7 @@ impl LanguageServer for CranberryLsp {
 
     // Handle completion requests
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let mut file_manager = match self.file_manager.write() {
-            Ok(fm) => fm,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut file_manager = self.file_manager.write().await;
 
         let doc = params.text_document_position.text_document;
         let position = params.text_document_position.position;
@@ -234,8 +239,8 @@ impl LanguageServer for CranberryLsp {
         let mut other_file_completions = vec![];
 
         for file in file_manager.get_files() {
-            for x in file.completion(&Position::new(0, 0)) {
-                if file.uri != doc.uri {
+            if file.uri != doc.uri {
+                for x in file.completion(&Position::new(0, 0)) {
                     other_file_completions.push(x);
                 }
             }
@@ -244,19 +249,24 @@ impl LanguageServer for CranberryLsp {
         if let Some(file) = file_manager.get_file_mut(&doc.uri) {
             let completions = if let Some(context) = params.context {
                 if context.trigger_kind == CompletionTriggerKind::TRIGGER_CHARACTER
-                    && context.trigger_character.as_deref() == Some(".")
+                    && (context.trigger_character.as_deref() == Some(".")
+                        || context.trigger_character.as_deref() == Some(":"))
                 {
                     // Extract receiver and get member completions
-                    let object = file.get_member_object(&file.source_code, &position);
+                    let object = if context.trigger_character.as_deref() == Some(":") {
+                        file.get_static_member_object(&file.source_code, &position)
+                    } else {
+                        file.get_member_object(&file.source_code, &position)
+                    };
                     let members = file.member_access(&object);
 
                     if members.is_empty() {
-						let old_file_uri = file.uri.clone();
+                        let old_file_uri = file.uri.clone();
                         let mut other_file_members = vec![];
 
                         for other in file_manager.get_files() {
-                            for x in other.member_access(&object) {
-                                if old_file_uri != doc.uri {
+                            if old_file_uri != other.uri {
+                                for x in other.member_access(&object) {
                                     other_file_members.push(x);
                                 }
                             }
