@@ -20,7 +20,7 @@ pub enum Symbol {
     Function {
         name: String,
         args: Vec<String>,
-        returns: Option<String>,
+        returns: HashSet<String>,
     },
     Variable {
         name: String,
@@ -132,11 +132,11 @@ impl LanguageModel {
                             } => CompletionItem {
                                 label: name.clone(),
                                 kind: Some(CompletionItemKind::FUNCTION),
-                                documentation: Some(if let Some(return_type) = returns {
+                                documentation: Some(if returns.is_empty() {
                                     Documentation::MarkupContent(MarkupContent {
                                         kind: MarkupKind::Markdown,
                                         value: format!(
-                                            "```cranberry\n({}) -> {return_type}\n```",
+                                            "```cranberry\n({}) -> nil\n```",
                                             args.join(", ")
                                         ),
                                     })
@@ -144,8 +144,13 @@ impl LanguageModel {
                                     Documentation::MarkupContent(MarkupContent {
                                         kind: MarkupKind::Markdown,
                                         value: format!(
-                                            "```cranberry\n({}) -> ???\n```",
-                                            args.join(", ")
+                                            "```cranberry\n({}) -> {}\n```",
+                                            args.join(", "),
+                                            returns
+                                                .iter()
+                                                .map(|x| x.as_str())
+                                                .collect::<Vec<&str>>()
+                                                .join(" | ")
                                         ),
                                     })
                                 }),
@@ -305,18 +310,23 @@ class {} {}{}{}{}
                 } => CompletionItem {
                     label: name.to_string(),
                     kind: Some(CompletionItemKind::FUNCTION),
-                    documentation: Some(if let Some(return_type) = returns {
+                    documentation: Some(if returns.is_empty() {
                         Documentation::MarkupContent(MarkupContent {
                             kind: MarkupKind::Markdown,
-                            value: format!(
-                                "```cranberry\n({}) -> {return_type}\n```",
-                                args.join(", ")
-                            ),
+                            value: format!("```cranberry\n({}) -> nil\n```", args.join(", ")),
                         })
                     } else {
                         Documentation::MarkupContent(MarkupContent {
                             kind: MarkupKind::Markdown,
-                            value: format!("```cranberry\n({}) -> ???\n```", args.join(", ")),
+                            value: format!(
+                                "```cranberry\n({}) -> {}\n```",
+                                args.join(", "),
+                                returns
+                                    .iter()
+                                    .map(|x| x.as_str())
+                                    .collect::<Vec<&str>>()
+                                    .join(" | ")
+                            ),
                         })
                     }),
                     label_details: Some(CompletionItemLabelDetails {
@@ -430,7 +440,7 @@ class {} {}{}{}{}
             "string" => Some("string".to_string()),
             "formatted_string" => Some("string".to_string()),
             "boolean" => Some("bool".to_string()),
-            "nil" => Some("nil?".to_string()),
+            "nil" => Some("nil".to_string()),
             "call_expression" => {
                 let name_node = node.child_by_field_name("name").unwrap();
                 let mut cursor = name_node.walk();
@@ -445,10 +455,10 @@ class {} {}{}{}{}
                         if let Symbol::Function { name, returns, .. } = i
                             && name == &func_name
                         {
-                            if let Some(return_type) = returns {
-                                return Some(return_type.clone());
-                            } else {
+                            if returns.is_empty() {
                                 return Some("nil".to_string());
+                            } else {
+                                return Some(returns.iter().collect::<Vec<_>>()[0].clone());
                             }
                         }
                     }
@@ -494,12 +504,26 @@ class {} {}{}{}{}
                                 && name == &member_name
                             {
                                 if expr_type == "call" {
-                                    return returns.clone().or(Some("nil".to_string()));
+                                    return if returns.is_empty() {
+                                        Some("nil".to_string())
+                                    } else {
+                                        Some(returns.iter().collect::<Vec<_>>()[0].clone())
+                                    };
                                 } else {
                                     return Some(format!(
-                                        "function: ({}) -> {}",
+                                        "```cranberry
+({}) -> {}
+```",
                                         args.join(", "),
-                                        if let Some(r) = returns { r } else { "???" }
+                                        if returns.is_empty() {
+                                            "nil".to_string()
+                                        } else {
+                                            returns
+                                                .iter()
+                                                .map(|x| x.clone())
+                                                .collect::<Vec<_>>()
+                                                .join(" | ")
+                                        }
                                     ));
                                 }
                             }
@@ -545,6 +569,21 @@ class {} {}{}{}{}
         }
     }
 
+    pub fn get_kind_descendants<'a>(node: Node<'a>, kind: &str) -> Vec<Node<'a>> {
+        let mut cursor = node.walk();
+        let mut nodes = vec![];
+
+        for child in node.children(&mut cursor) {
+            nodes.extend(Self::get_kind_descendants(child, kind));
+
+            if child.kind() == kind {
+                nodes.push(child);
+            }
+        }
+
+        nodes
+    }
+
     pub fn evaluate_node<'a>(
         node: Node<'a>,
         _cursor: &mut TreeCursor<'a>,
@@ -557,7 +596,7 @@ class {} {}{}{}{}
             "function_declaration" => {
                 let name = Self::get_field_text(node, "name", source_code);
 
-                let mut returns = None;
+                let mut returns = HashSet::new();
                 let mut args = vec![];
 
                 if let Some(parameters) = Self::try_get_field(node, "parameters") {
@@ -577,15 +616,37 @@ class {} {}{}{}{}
                         return;
                     }
 
+                    let mut inner_scope = Scope::new(start, end);
+
                     if b_cursor.node().kind() == "inline_block" {
                         if let Some(value) = Self::try_get_field(b_cursor.node(), "value") {
-                            returns = Self::get_value_type(value, source_code, scope);
+                            if let Some(ret) =
+                                Self::get_value_type(value, source_code, &inner_scope)
+                            {
+                                returns.insert(ret);
+                            } else {
+                                returns.insert("???".to_string());
+                            }
+                        }
+                    } else {
+                        let return_statements =
+                            Self::get_kind_descendants(b_cursor.node(), "return_statement");
+
+                        for statements in return_statements {
+                            if let Some(value) = statements.child_by_field_name("value") {
+                                let return_type =
+                                    Self::get_value_type(value, source_code, &inner_scope);
+
+                                if let Some(ret) = return_type {
+                                    returns.insert(ret);
+                                } else {
+                                    returns.insert("???".to_string());
+                                }
+                            }
                         }
                     }
 
                     if b_cursor.goto_first_child() {
-                        let mut inner_scope = Scope::new(start, end);
-
                         for i in args.iter() {
                             inner_scope.add_symbol(Symbol::Variable {
                                 name: i.clone(),
@@ -594,13 +655,6 @@ class {} {}{}{}{}
                         }
 
                         loop {
-                            if b_cursor.node().kind() == "return_statement" {
-                                if let Some(value) = b_cursor.node().child_by_field_name("value") {
-                                    returns =
-                                        Self::get_value_type(value, source_code, &inner_scope);
-                                }
-                            }
-
                             Self::evaluate_node(
                                 b_cursor.node(),
                                 &mut b_cursor,
