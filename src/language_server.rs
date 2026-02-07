@@ -4,11 +4,7 @@ use crate::{
 };
 use std::{collections::HashSet, path::PathBuf};
 use tokio::sync::RwLock;
-use tower_lsp::{
-    Client, LanguageServer,
-    jsonrpc::Result,
-    lsp_types::*,
-};
+use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
 
 pub struct CranberryLsp {
     client: Client,
@@ -259,6 +255,7 @@ impl LanguageServer for CranberryLsp {
                         file.get_member_object(&file.source_code, &position)
                     };
                     let members = file.member_access(&object);
+                    let obj_type = file.get_object_type(&object, &position);
 
                     if members.is_empty() {
                         let old_file_uri = file.uri.clone();
@@ -266,8 +263,14 @@ impl LanguageServer for CranberryLsp {
 
                         for other in file_manager.get_files() {
                             if old_file_uri != other.uri {
-                                for x in other.member_access(&object) {
-                                    other_file_members.push(x);
+                                if let Some(ref obj) = obj_type {
+                                    for x in other.member_access(&obj) {
+                                        other_file_members.push(x);
+                                    }
+                                } else {
+                                    for x in other.member_access(&object) {
+                                        other_file_members.push(x);
+                                    }
                                 }
                             }
                         }

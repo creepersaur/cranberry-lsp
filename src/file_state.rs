@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::{
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 use tree_sitter_cranberry;
 
-use crate::language_model::LanguageModel;
+use crate::language_model::{LanguageModel, Symbol};
 
 #[allow(unused)]
 pub struct FileState {
@@ -194,6 +194,36 @@ impl FileState {
         self.model.build_model(&self.tree, &self.source_code);
 
         self.model.get_member_symbols(object)
+    }
+
+    pub fn get_object_type(&mut self, object: &str, position: &Position) -> Option<String> {
+        let scopes = {
+            self.model
+                .accumulate_cursor_scope(&self.line_starts, &self.source_code, position)
+        };
+        for scope in scopes {
+            for i in scope.symbols.iter() {
+                if let Symbol::Variable {
+                    name,
+                    optional_type,
+                } = i
+                    && name == object
+                {
+                    return optional_type.clone();
+                }
+                if let Symbol::Class { name, .. } = i
+                    && name == object
+                {
+                    return Some(name.clone());
+                }
+                if let Symbol::Function { name, .. } = i
+                    && name == object
+                {
+                    return Some(name.clone());
+                }
+            }
+        }
+        None
     }
 
     pub fn get_member_object(&self, source_code: &str, position: &Position) -> String {
