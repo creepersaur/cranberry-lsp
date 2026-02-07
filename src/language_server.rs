@@ -233,16 +233,24 @@ impl LanguageServer for CranberryLsp {
         let position = params.text_document_position.position;
 
         let mut other_file_completions = vec![];
+        let mut project_symbols = vec![];
 
         for file in file_manager.get_files() {
+            file.model.clear();
+
             if file.uri != doc.uri {
+				file.model.build_model(&file.tree, &file.source_code);
                 for x in file.completion(&Position::new(0, 0)) {
                     other_file_completions.push(x);
+                    project_symbols.append(&mut file.model.global_scope.symbols);
                 }
             }
         }
 
         if let Some(file) = file_manager.get_file_mut(&doc.uri) {
+            file.model.global_scope.symbols.append(&mut project_symbols);
+			file.model.build_model(&file.tree, &file.source_code);
+
             let completions = if let Some(context) = params.context {
                 if context.trigger_kind == CompletionTriggerKind::TRIGGER_CHARACTER
                     && (context.trigger_character.as_deref() == Some(".")
@@ -257,25 +265,8 @@ impl LanguageServer for CranberryLsp {
                     let members = file.member_access(&object);
                     let obj_type = file.get_object_type(&object, &position);
 
-                    if members.is_empty() {
-                        let old_file_uri = file.uri.clone();
-                        let mut other_file_members = vec![];
-
-                        for other in file_manager.get_files() {
-                            if old_file_uri != other.uri {
-                                if let Some(ref obj) = obj_type {
-                                    for x in other.member_access(&obj) {
-                                        other_file_members.push(x);
-                                    }
-                                } else {
-                                    for x in other.member_access(&object) {
-                                        other_file_members.push(x);
-                                    }
-                                }
-                            }
-                        }
-
-                        other_file_members
+                    if let Some(obj) = obj_type {
+                        [members, file.member_access(&obj)].concat()
                     } else {
                         members
                     }

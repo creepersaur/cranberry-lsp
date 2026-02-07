@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde_json::json;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemLabelDetails, Documentation,
-    InsertTextFormat, Position,
+    InsertTextFormat, MarkupContent, MarkupKind, Position,
 };
 use tree_sitter::{Node, Tree, TreeCursor};
 
@@ -20,6 +20,7 @@ pub enum Symbol {
     Function {
         name: String,
         args: Vec<String>,
+        returns: Option<String>,
     },
     Variable {
         name: String,
@@ -79,10 +80,13 @@ impl LanguageModel {
         }
     }
 
+	pub fn clear(&mut self) {
+		self.global_scope.children.clear();
+        self.global_scope.symbols.clear();
+	}
+
     pub fn build_model(&mut self, tree: &Tree, source_code: &str) {
         self.global_scope.end = tree.root_node().end_byte();
-        self.global_scope.children.clear();
-        self.global_scope.symbols.clear();
 
         self.source_code = source_code.to_string();
 
@@ -99,9 +103,6 @@ impl LanguageModel {
                 break;
             }
         }
-
-        log::info!("{:#?}", self.global_scope);
-        log::info!("{}", format_sexp(&tree.root_node().to_sexp()));
     }
 
     pub fn get_completion_symbols(&self, scope_path: Vec<&Scope>) -> Vec<CompletionItem> {
@@ -124,9 +125,30 @@ impl LanguageModel {
                                 ..Default::default()
                             },
 
-                            Symbol::Function { name, args } => CompletionItem {
+                            Symbol::Function {
+                                name,
+                                args,
+                                returns,
+                            } => CompletionItem {
                                 label: name.clone(),
                                 kind: Some(CompletionItemKind::FUNCTION),
+                                documentation: Some(if let Some(return_type) = returns {
+                                    Documentation::MarkupContent(MarkupContent {
+                                        kind: MarkupKind::Markdown,
+                                        value: format!(
+                                            "```cranberry\n({}) -> {return_type}\n```",
+                                            args.join(", ")
+                                        ),
+                                    })
+                                } else {
+                                    Documentation::MarkupContent(MarkupContent {
+                                        kind: MarkupKind::Markdown,
+                                        value: format!(
+                                            "```cranberry\n({}) -> ???\n```",
+                                            args.join(", ")
+                                        ),
+                                    })
+                                }),
                                 label_details: Some(CompletionItemLabelDetails {
                                     detail: Some(format!("({})", args.join(", "))),
                                     description: None,
@@ -232,7 +254,7 @@ class {} {}{}{}{}
                                                 functions
                                                     .iter()
                                                     .map(|x| {
-                                                        let Symbol::Function { name, args } = x
+                                                        let Symbol::Function { name, args, .. } = x
                                                         else {
                                                             unreachable!(
                                                                 "non-function in functions vec"
@@ -276,9 +298,27 @@ class {} {}{}{}{}
         let function_completion = functions
             .iter()
             .map(|x| match x {
-                Symbol::Function { name, args } => CompletionItem {
+                Symbol::Function {
+                    name,
+                    args,
+                    returns,
+                } => CompletionItem {
                     label: name.to_string(),
                     kind: Some(CompletionItemKind::FUNCTION),
+                    documentation: Some(if let Some(return_type) = returns {
+                        Documentation::MarkupContent(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: format!(
+                                "```cranberry\n({}) -> {return_type}\n```",
+                                args.join(", ")
+                            ),
+                        })
+                    } else {
+                        Documentation::MarkupContent(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: format!("```cranberry\n({}) -> ???\n```", args.join(", ")),
+                        })
+                    }),
                     label_details: Some(CompletionItemLabelDetails {
                         detail: Some(format!(
                             "({})",
@@ -399,8 +439,79 @@ class {} {}{}{}{}
                 if cursor.node().kind() == "pascal_case_identifier" {
                     Some(Self::get_text(name_node, source_code))
                 } else {
-                    Some("nil".to_string())
+                    let func_name = Self::get_text(name_node, source_code);
+
+                    for i in scope.symbols.iter() {
+                        if let Symbol::Function { name, returns, .. } = i
+                            && name == &func_name
+                        {
+                            if let Some(return_type) = returns {
+                                return Some(return_type.clone());
+                            } else {
+                                return Some("nil".to_string());
+                            }
+                        }
+                    }
+
+                    None
                 }
+            }
+            "member_expression" => {
+                let object = Self::get_field(node, "object");
+                let member = Self::get_field(node, "member");
+
+                let object_type = Self::get_value_type(object, source_code, scope)?;
+
+                for symbol in scope.symbols.iter() {
+                    if let Symbol::Class {
+                        name,
+                        functions,
+                        variables,
+                        ..
+                    } = symbol
+                        && name == &object_type
+                    {
+                        // Now check what kind of member access this is
+						let mut expr_type = "normal";
+
+                        let member_name = if member.kind() == "call_expression" {
+                            // hello.world()
+							expr_type = "call";
+                            let method_name_node = member.child_by_field_name("name")?;
+                            Self::get_text(method_name_node, source_code)
+                        } else {
+                            // hello.world
+                            Self::get_text(member, source_code)
+                        };
+
+                        // Search for the member in functions
+                        for func in functions {
+                            if let Symbol::Function { name, returns, .. } = func
+                                && name == &member_name
+                            {
+								if expr_type == "call" {
+									return returns.clone().or(Some("nil".to_string()));
+								} else {
+									return Some("function".to_string())
+								}
+                            }
+                        }
+
+                        // Search for the member in variables
+                        for var in variables {
+                            if let Symbol::Variable {
+                                name,
+                                optional_type,
+                            } = var
+                                && name == &member_name
+                            {
+                                return optional_type.clone();
+                            }
+                        }
+                    }
+                }
+
+                None
             }
 
             "identifier" => {
@@ -438,6 +549,7 @@ class {} {}{}{}{}
             "function_declaration" => {
                 let name = Self::get_field_text(node, "name", source_code);
 
+                let mut returns = None;
                 let mut args = vec![];
 
                 if let Some(parameters) = Self::try_get_field(node, "parameters") {
@@ -453,7 +565,17 @@ class {} {}{}{}{}
                     let start = b_cursor.node().start_byte();
                     let end = b_cursor.node().end_byte();
 
-                    if b_cursor.goto_first_child() && b_cursor.goto_first_child() {
+                    if !b_cursor.goto_first_child() {
+                        return;
+                    }
+
+                    if b_cursor.node().kind() == "inline_block" {
+                        if let Some(value) = Self::try_get_field(b_cursor.node(), "value") {
+                            returns = Self::get_value_type(value, source_code, scope);
+                        }
+                    }
+
+                    if b_cursor.goto_first_child() {
                         let mut inner_scope = Scope::new(start, end);
 
                         for i in args.iter() {
@@ -464,6 +586,13 @@ class {} {}{}{}{}
                         }
 
                         loop {
+                            if b_cursor.node().kind() == "return_statement" {
+                                if let Some(value) = b_cursor.node().child_by_field_name("value") {
+                                    returns =
+                                        Self::get_value_type(value, source_code, &inner_scope);
+                                }
+                            }
+
                             Self::evaluate_node(
                                 b_cursor.node(),
                                 &mut b_cursor,
@@ -480,7 +609,11 @@ class {} {}{}{}{}
                     }
                 }
 
-                scope.add_symbol(Symbol::Function { name, args });
+                scope.add_symbol(Symbol::Function {
+                    name,
+                    args,
+                    returns,
+                });
             }
 
             "constructor" => {
@@ -634,48 +767,6 @@ class {} {}{}{}{}
         }
     }
 
-    // pub fn get_cursor_scope(
-    //     &self,
-    //     line_starts: &[usize],
-    //     source_code: &str,
-    //     position: &Position,
-    // ) -> &Scope {
-    //     let position_byte = position_to_byte_offset_fast(
-    //         source_code,
-    //         line_starts,
-    //         position.line as usize,
-    //         position.character,
-    //     );
-
-    //     log::info!("CURSOR position: {position_byte:?}");
-
-    //     if let Some(pos) = position_byte {
-    //         if let Some(scope) = self.get_inner_scope_from_byte(&self.global_scope, pos) {
-    //             scope
-    //         } else {
-    //             &self.global_scope
-    //         }
-    //     } else {
-    //         &self.global_scope
-    //     }
-    // }
-
-    // pub fn get_inner_scope_from_byte<'a>(
-    //     &self,
-    //     scope: &'a Scope,
-    //     position_byte: usize,
-    // ) -> Option<&'a Scope> {
-    //     if scope.start <= position_byte && scope.end > position_byte {
-    //         for child in scope.children.iter() {
-    //             if let Some(scope) = self.get_inner_scope_from_byte(child, position_byte) {
-    //                 return Some(scope);
-    //             }
-    //         }
-    //     }
-
-    //     Some(scope)
-    // }
-
     pub fn accumulate_cursor_scope(
         &self,
         line_starts: &[usize],
@@ -688,8 +779,6 @@ class {} {}{}{}{}
             position.line as usize,
             position.character,
         );
-
-        log::info!("CURSOR position: {position_byte:?}");
 
         let mut scope_path = vec![];
 

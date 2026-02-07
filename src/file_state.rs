@@ -11,9 +11,9 @@ pub struct FileState {
     parser: Parser,
     pub uri: Url,
     pub source_code: String,
-    tree: Tree,
-    line_starts: Vec<usize>,
-    model: LanguageModel,
+    pub tree: Tree,
+    pub line_starts: Vec<usize>,
+    pub model: LanguageModel,
 }
 
 impl FileState {
@@ -160,8 +160,6 @@ impl FileState {
     }
 
     pub fn completion(&mut self, position: &Position) -> Vec<CompletionItem> {
-        self.model.build_model(&self.tree, &self.source_code);
-
         let scope = {
             self.model
                 .accumulate_cursor_scope(&self.line_starts, &self.source_code, position)
@@ -191,8 +189,6 @@ impl FileState {
     }
 
     pub fn member_access(&mut self, object: &str) -> Vec<CompletionItem> {
-        self.model.build_model(&self.tree, &self.source_code);
-
         self.model.get_member_symbols(object)
     }
 
