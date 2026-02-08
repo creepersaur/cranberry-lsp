@@ -66,7 +66,6 @@ impl Scope {
         self.children.push(scope);
     }
 }
-
 pub struct LanguageModel {
     pub global_scope: Scope,
     source_code: String,
@@ -97,7 +96,9 @@ impl LanguageModel {
 
         loop {
             let node = cursor.node();
-            Self::evaluate_node(node, &mut cursor, &mut self.global_scope, source_code);
+			let mut global_scope = self.global_scope.clone();
+            self.evaluate_node(node, &mut cursor, &mut global_scope, source_code);
+			self.global_scope = global_scope;
 
             if !cursor.goto_next_sibling() {
                 break;
@@ -434,14 +435,20 @@ class {} {}{}{}{}
         Self::get_text(Self::get_field(node, name), source_code)
     }
 
-    pub fn get_value_type<'a>(node: Node<'a>, source_code: &str, scope: &Scope) -> Option<String> {
+    pub fn get_value_type<'a>(
+        &self,
+        node: Node<'a>,
+        source_code: &str,
+        scope: &Scope,
+    ) -> Option<String> {
         match node.kind() {
             "number" => Some("number".to_string()),
             "string" => Some("string".to_string()),
             "formatted_string" => Some("string".to_string()),
             "boolean" => Some("bool".to_string()),
             "nil" => Some("nil".to_string()),
-            "call_expression" => {
+            
+			"call_expression" => {
                 let name_node = node.child_by_field_name("name").unwrap();
                 let mut cursor = name_node.walk();
                 cursor.goto_first_child();
@@ -451,14 +458,18 @@ class {} {}{}{}{}
                 } else {
                     let func_name = Self::get_text(name_node, source_code);
 
-                    for i in scope.symbols.iter() {
-                        if let Symbol::Function { name, returns, .. } = i
-                            && name == &func_name
-                        {
-                            if returns.is_empty() {
-                                return Some("nil".to_string());
-                            } else {
-                                return Some(returns.iter().collect::<Vec<_>>()[0].clone());
+                    let scope_path = self.accumulate_node_scope(node, scope);
+
+                    for scope in scope_path.iter() {
+                        for i in scope.symbols.iter() {
+                            if let Symbol::Function { name, returns, .. } = i
+                                && name == &func_name
+                            {
+                                if returns.is_empty() {
+                                    return Some("nil".to_string());
+                                } else {
+                                    return Some(returns.iter().collect::<Vec<_>>()[0].clone());
+                                }
                             }
                         }
                     }
@@ -470,74 +481,75 @@ class {} {}{}{}{}
                 let object = Self::get_field(node, "object");
                 let member = Self::get_field(node, "member");
 
-                let object_type = Self::get_value_type(object, source_code, scope)?;
+                let object_type = self.get_value_type(object, source_code, scope)?;
+                let scope_path = self.accumulate_node_scope(node, scope);
 
-                for symbol in scope.symbols.iter() {
-                    if let Symbol::Class {
-                        name,
-                        functions,
-                        variables,
-                        ..
-                    } = symbol
-                        && name == &object_type
-                    {
-                        // Now check what kind of member access this is
-                        let mut expr_type = "normal";
+                for scope in scope_path.iter() {
+                    for symbol in scope.symbols.iter() {
+                        if let Symbol::Class {
+                            name,
+                            functions,
+                            variables,
+                            ..
+                        } = symbol
+                            && name == &object_type
+                        {
+                            // Now check what kind of member access this is
+                            let mut expr_type = "normal";
 
-                        let member_name = if member.kind() == "call_expression" {
-                            // hello.world()
-                            expr_type = "call";
-                            let method_name_node = member.child_by_field_name("name")?;
-                            Self::get_text(method_name_node, source_code)
-                        } else {
-                            // hello.world
-                            Self::get_text(member, source_code)
-                        };
+                            let member_name = if member.kind() == "call_expression" {
+                                // hello.world()
+                                expr_type = "call";
+                                let method_name_node = member.child_by_field_name("name")?;
+                                Self::get_text(method_name_node, source_code)
+                            } else {
+                                // hello.world
+                                Self::get_text(member, source_code)
+                            };
 
-                        // Search for the member in functions
-                        for func in functions {
-                            if let Symbol::Function {
-                                name,
-                                args,
-                                returns,
-                            } = func
-                                && name == &member_name
-                            {
-                                if expr_type == "call" {
-                                    return if returns.is_empty() {
-                                        Some("nil".to_string())
-                                    } else {
-                                        Some(returns.iter().collect::<Vec<_>>()[0].clone())
-                                    };
-                                } else {
-                                    return Some(format!(
-                                        "```cranberry
-({}) -> {}
-```",
-                                        args.join(", "),
-                                        if returns.is_empty() {
-                                            "nil".to_string()
+                            // Search for the member in functions
+                            for func in functions {
+                                if let Symbol::Function {
+                                    name,
+                                    args,
+                                    returns,
+                                } = func
+                                    && name == &member_name
+                                {
+                                    if expr_type == "call" {
+                                        return if returns.is_empty() {
+                                            Some("nil".to_string())
                                         } else {
-                                            returns
-                                                .iter()
-                                                .map(|x| x.clone())
-                                                .collect::<Vec<_>>()
-                                                .join(" | ")
-                                        }
-                                    ));
+                                            Some(returns.iter().collect::<Vec<_>>()[0].clone())
+                                        };
+                                    } else {
+                                        return Some(format!(
+                                            "function: ({}) -> {}",
+                                            args.join(", "),
+                                            if returns.is_empty() {
+                                                "nil".to_string()
+                                            } else {
+                                                returns
+                                                    .iter()
+                                                    .map(|x| x.clone())
+                                                    .collect::<Vec<_>>()
+                                                    .join(" | ")
+                                            }
+                                        ));
+                                    }
                                 }
                             }
-                        }
 
-                        // Search for the member in variables
-                        for var in variables {
-                            if let Symbol::Variable {
-                                name,
-                                optional_type,
-                            } = var
-                                && name == &member_name
-                            {
-                                return optional_type.clone();
+                            // Search for the member in variables
+                            for var in variables {
+                                if let Symbol::Variable {
+                                    name,
+                                    optional_type,
+                                } = var
+                                    && name == &member_name
+                                {
+                                    return optional_type.clone();
+                                }
                             }
                         }
                     }
@@ -554,11 +566,22 @@ class {} {}{}{}{}
                 if cursor.node().kind() == "pascal_case_identifier" {
                     Some(text)
                 } else {
-                    for i in scope.symbols.iter() {
-                        if let Symbol::Variable { optional_type, .. } = i {
-                            return optional_type.clone();
-                        } else if let Symbol::Function { .. } = i {
-                            return Some("function".to_string());
+                    let scope_path = self.accumulate_node_scope(node, scope);
+
+                    for scope in scope_path {
+                        for i in scope.symbols.iter() {
+                            if let Symbol::Variable {
+                                name,
+                                optional_type,
+                            } = i
+                                && name == &text
+                            {
+                                return optional_type.clone();
+                            } else if let Symbol::Function { name, .. } = i
+                                && name == &text
+                            {
+                                return Some("function".to_string());
+                            }
                         }
                     }
                     None
@@ -585,6 +608,7 @@ class {} {}{}{}{}
     }
 
     pub fn evaluate_node<'a>(
+        &self,
         node: Node<'a>,
         _cursor: &mut TreeCursor<'a>,
         scope: &mut Scope,
@@ -620,28 +644,11 @@ class {} {}{}{}{}
 
                     if b_cursor.node().kind() == "inline_block" {
                         if let Some(value) = Self::try_get_field(b_cursor.node(), "value") {
-                            if let Some(ret) =
-                                Self::get_value_type(value, source_code, &inner_scope)
+                            if let Some(ret) = self.get_value_type(value, source_code, &inner_scope)
                             {
                                 returns.insert(ret);
                             } else {
                                 returns.insert("???".to_string());
-                            }
-                        }
-                    } else {
-                        let return_statements =
-                            Self::get_kind_descendants(b_cursor.node(), "return_statement");
-
-                        for statements in return_statements {
-                            if let Some(value) = statements.child_by_field_name("value") {
-                                let return_type =
-                                    Self::get_value_type(value, source_code, &inner_scope);
-
-                                if let Some(ret) = return_type {
-                                    returns.insert(ret);
-                                } else {
-                                    returns.insert("???".to_string());
-                                }
                             }
                         }
                     }
@@ -655,7 +662,7 @@ class {} {}{}{}{}
                         }
 
                         loop {
-                            Self::evaluate_node(
+                            self.evaluate_node(
                                 b_cursor.node(),
                                 &mut b_cursor,
                                 &mut inner_scope,
@@ -666,9 +673,23 @@ class {} {}{}{}{}
                                 break;
                             }
                         }
-
-                        scope.add_child_scope(inner_scope);
                     }
+
+                    let return_statements = Self::get_kind_descendants(block, "return_statement");
+
+                    for statements in return_statements {
+                        if let Some(value) = statements.child_by_field_name("value") {
+                            let return_type = self.get_value_type(value, source_code, &inner_scope);
+
+                            if let Some(ret) = return_type {
+                                returns.insert(ret);
+                            } else {
+                                returns.insert("???".to_string());
+                            }
+                        }
+                    }
+
+                    scope.add_child_scope(inner_scope);
                 }
 
                 scope.add_symbol(Symbol::Function {
@@ -703,12 +724,12 @@ class {} {}{}{}{}
 
                 let values: Vec<_> = node
                     .children_by_field_name("value", &mut node.walk())
-                    .map(|x| Self::get_value_type(x, source_code, scope))
+                    .map(|x| self.get_value_type(x, source_code, scope))
                     .collect();
 
                 let optional_types: Vec<_> = node
                     .children_by_field_name("type", &mut node.walk())
-                    .map(|x| Self::get_value_type(x, source_code, scope))
+                    .map(|x| self.get_value_type(x, source_code, scope))
                     .collect();
 
                 if values.len() >= names.len() {
@@ -751,7 +772,7 @@ class {} {}{}{}{}
 
                 if class_cursor.goto_next_sibling() {
                     loop {
-                        Self::evaluate_node(
+                        self.evaluate_node(
                             class_cursor.node(),
                             &mut class_cursor,
                             &mut class_scope,
@@ -795,7 +816,7 @@ class {} {}{}{}{}
                         let mut inner_scope = Scope::new(start, end);
 
                         loop {
-                            Self::evaluate_node(
+                            self.evaluate_node(
                                 b_cursor.node(),
                                 &mut b_cursor,
                                 &mut inner_scope,
@@ -866,6 +887,33 @@ class {} {}{}{}{}
             let key = (scope.start, scope.end);
             seen.insert(key)
         });
+
+        scope_path
+    }
+
+    pub fn accumulate_byte_scope<'a>(&'a self, byte: usize, scope_path: &mut Vec<&'a Scope>) {
+        if let Some(scope) =
+            self.accumulate_inner_scope_from_byte(&self.global_scope, byte, scope_path)
+        {
+            // Push the innermost containing scope too, but only if autocomplete isn't disabled.
+            if !scope.disable_autocomplete {
+                scope_path.push(scope);
+            }
+        }
+
+		scope_path.push(&self.global_scope);
+
+        // remove duplicate scopes (by start,end)
+        let mut seen = HashSet::new();
+        scope_path.retain(|scope| {
+            let key = (scope.start, scope.end);
+            seen.insert(key)
+        });
+    }
+
+    pub fn accumulate_node_scope<'a>(&'a self, node: Node<'a>, scope: &'a Scope) -> Vec<&'a Scope> {
+        let mut scope_path = vec![scope];
+        self.accumulate_byte_scope(node.start_byte(), &mut scope_path);
 
         scope_path
     }
