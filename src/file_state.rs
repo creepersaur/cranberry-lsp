@@ -24,7 +24,7 @@ impl FileState {
             .expect("Error loading Cranberry grammar");
 
         let tree = parser.parse(&source_code, None).unwrap();
-        let mut model = LanguageModel::new();
+        let mut model = LanguageModel::new(Some(uri.clone()));
         model.build_model(&tree, &source_code);
 
         Self {
@@ -202,6 +202,7 @@ impl FileState {
                 if let Symbol::Variable {
                     name,
                     optional_type,
+                    ..
                 } = i
                     && name == object
                 {
@@ -222,8 +223,12 @@ impl FileState {
         None
     }
 
-    pub fn get_member_object(&self, source_code: &str, position: &Position) -> String {
-        let line = source_code.lines().nth(position.line as usize).unwrap();
+    pub fn get_member_object(&self, position: &Position) -> String {
+        let line = self
+            .source_code
+            .lines()
+            .nth(position.line as usize)
+            .unwrap();
         let col = position.character as usize;
         let dot_pos = col.saturating_sub(1);
 
@@ -240,8 +245,12 @@ impl FileState {
         line[start..dot_pos].to_string()
     }
 
-    pub fn get_static_member_object(&self, source_code: &str, position: &Position) -> String {
-        let line = source_code.lines().nth(position.line as usize).unwrap();
+    pub fn get_static_member_object(&self, position: &Position) -> String {
+        let line = self
+            .source_code
+            .lines()
+            .nth(position.line as usize)
+            .unwrap();
         let col = position.character as usize;
         let dot_pos = col.saturating_sub(1);
 
@@ -259,6 +268,53 @@ impl FileState {
         }
 
         line[start..dot_pos - 1].to_string()
+    }
+
+    pub fn get_word_at_position(&self, position: &Position) -> Option<String> {
+        let byte = position_to_byte_offset_fast(
+            &self.source_code,
+            &self.line_starts,
+            position.line as usize,
+            position.character,
+        );
+
+        if let Some(start) = byte {
+            const PUNCTUATION: &str = "!@#$%^&*()[]{}'\",./<>?:;\\~` \t\n\r";
+
+            let chars: Vec<char> = self.source_code.chars().collect();
+            let mut word = String::new();
+            let mut i = start;
+
+            loop {
+                i -= 1;
+				if PUNCTUATION.contains(chars[i]) {
+					i += 1;
+					break;
+				}
+                if i == 0 {
+                    break;
+                }
+            }
+
+            while i < self.source_code.len() {
+                if PUNCTUATION.contains(chars[i]) {
+                    break;
+                }
+
+                word.push(chars[i]);
+
+                i += 1;
+            }
+
+			return Some(word);
+            // return Some((word, byte_offset_to_point(
+			// 	&self.source_code,
+			// 	&self.line_starts,
+			// 	i
+			// )));
+        }
+
+		None
     }
 }
 

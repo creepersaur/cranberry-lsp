@@ -77,7 +77,7 @@ impl FileManager {
     }
 
     #[allow(unused)]
-    pub fn get_file(&mut self, url: &Url) -> Option<&FileState> {
+    pub fn get_file(&self, url: &Url) -> Option<&FileState> {
         self.files.get(url)
     }
 }

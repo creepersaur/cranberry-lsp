@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde_json::json;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemLabelDetails, Documentation,
-    InsertTextFormat, MarkupContent, MarkupKind, Position,
+    InsertTextFormat, MarkupContent, MarkupKind, Position, Url,
 };
 use tree_sitter::{Node, Tree, TreeCursor};
 
@@ -16,15 +16,27 @@ pub enum Symbol {
         constructor: Option<Box<Symbol>>,
         functions: Vec<Symbol>,
         variables: Vec<Symbol>,
+        file: Option<Url>,
+        start_position: Option<Position>,
+        end_position: Option<Position>,
     },
     Function {
         name: String,
         args: Vec<String>,
         returns: HashSet<String>,
+        file: Option<Url>,
+        start_position: Option<Position>,
+        end_position: Option<Position>,
     },
+    #[allow(unused)]
     Variable {
         name: String,
+        constant: bool,
         optional_type: Option<String>,
+        file: Option<Url>,
+        start_position: Option<Position>,
+        end_position: Option<Position>,
+        type_defined: bool,
     },
     Constructor {
         args: Vec<String>,
@@ -65,17 +77,29 @@ impl Scope {
     pub fn add_child_scope(&mut self, scope: Scope) {
         self.children.push(scope);
     }
+
+    pub fn flatten_symbols(&mut self) -> &mut Vec<Symbol> {
+        let symbols = &mut self.symbols;
+
+        for i in self.children.iter_mut() {
+            symbols.append(i.flatten_symbols());
+        }
+
+        symbols
+    }
 }
 pub struct LanguageModel {
     pub global_scope: Scope,
+    pub file: Option<Url>,
     source_code: String,
 }
 
 impl LanguageModel {
-    pub fn new() -> Self {
+    pub fn new(file: Option<Url>) -> Self {
         Self {
             global_scope: Scope::default(),
             source_code: String::new(),
+            file,
         }
     }
 
@@ -86,7 +110,6 @@ impl LanguageModel {
 
     pub fn build_model(&mut self, tree: &Tree, source_code: &str) {
         self.global_scope.end = tree.root_node().end_byte();
-
         self.source_code = source_code.to_string();
 
         let mut cursor = tree.walk();
@@ -96,9 +119,9 @@ impl LanguageModel {
 
         loop {
             let node = cursor.node();
-			let mut global_scope = self.global_scope.clone();
+            let mut global_scope = self.global_scope.clone();
             self.evaluate_node(node, &mut cursor, &mut global_scope, source_code);
-			self.global_scope = global_scope;
+            self.global_scope = global_scope;
 
             if !cursor.goto_next_sibling() {
                 break;
@@ -118,9 +141,15 @@ impl LanguageModel {
                             Symbol::Variable {
                                 name,
                                 optional_type,
+                                constant,
+                                ..
                             } => CompletionItem {
                                 label: name.clone(),
-                                kind: Some(CompletionItemKind::VARIABLE),
+                                kind: Some(if *constant {
+                                    CompletionItemKind::CONSTANT
+                                } else {
+                                    CompletionItemKind::VARIABLE
+                                }),
                                 detail: optional_type.clone(),
                                 insert_text: Some(name.clone()),
                                 ..Default::default()
@@ -130,6 +159,7 @@ impl LanguageModel {
                                 name,
                                 args,
                                 returns,
+								..
                             } => CompletionItem {
                                 label: name.clone(),
                                 kind: Some(CompletionItemKind::FUNCTION),
@@ -169,6 +199,7 @@ impl LanguageModel {
                                 functions,
                                 variables,
                                 constructor,
+								..
                             } => CompletionItem {
                                 label: name.clone(),
                                 kind: Some(CompletionItemKind::CLASS),
@@ -231,6 +262,8 @@ class {} {}{}{}{}
                                                         let Symbol::Variable {
                                                             name,
                                                             optional_type,
+                                                            constant,
+                                                            ..
                                                         } = x
                                                         else {
                                                             unreachable!(
@@ -238,8 +271,14 @@ class {} {}{}{}{}
                                                             );
                                                         };
 
+                                                        let statement = if *constant {
+                                                            "const"
+                                                        } else {
+                                                            "let"
+                                                        };
+
                                                         format!(
-                                                            "\tlet {name}{};",
+                                                            "\t{statement} {name}{};",
                                                             if let Some(t) = optional_type {
                                                                 format!(": {t}")
                                                             } else {
@@ -308,6 +347,7 @@ class {} {}{}{}{}
                     name,
                     args,
                     returns,
+					..
                 } => CompletionItem {
                     label: name.to_string(),
                     kind: Some(CompletionItemKind::FUNCTION),
@@ -361,9 +401,15 @@ class {} {}{}{}{}
                 Symbol::Variable {
                     name,
                     optional_type,
+                    constant,
+                    ..
                 } => CompletionItem {
                     label: name.to_string(),
-                    kind: Some(CompletionItemKind::VARIABLE),
+                    kind: Some(if *constant {
+                        CompletionItemKind::CONSTANT
+                    } else {
+                        CompletionItemKind::VARIABLE
+                    }),
                     documentation: if let Some(optional_type) = optional_type {
                         Some(Documentation::String(optional_type.clone()))
                     } else {
@@ -398,6 +444,7 @@ class {} {}{}{}{}
             if let Symbol::Variable {
                 name,
                 optional_type,
+                ..
             } = i
                 && name == object
             {
@@ -447,8 +494,8 @@ class {} {}{}{}{}
             "formatted_string" => Some("string".to_string()),
             "boolean" => Some("bool".to_string()),
             "nil" => Some("nil".to_string()),
-            
-			"call_expression" => {
+
+            "call_expression" => {
                 let name_node = node.child_by_field_name("name").unwrap();
                 let mut cursor = name_node.walk();
                 cursor.goto_first_child();
@@ -513,6 +560,7 @@ class {} {}{}{}{}
                                     name,
                                     args,
                                     returns,
+									..
                                 } = func
                                     && name == &member_name
                                 {
@@ -545,6 +593,7 @@ class {} {}{}{}{}
                                 if let Symbol::Variable {
                                     name,
                                     optional_type,
+                                    ..
                                 } = var
                                     && name == &member_name
                                 {
@@ -573,6 +622,7 @@ class {} {}{}{}{}
                             if let Symbol::Variable {
                                 name,
                                 optional_type,
+                                ..
                             } = i
                                 && name == &text
                             {
@@ -618,6 +668,7 @@ class {} {}{}{}{}
 
         match kind {
             "function_declaration" => {
+				let name_node = Self::get_field(node, "name");
                 let name = Self::get_field_text(node, "name", source_code);
 
                 let mut returns = HashSet::new();
@@ -626,7 +677,7 @@ class {} {}{}{}{}
                 if let Some(parameters) = Self::try_get_field(node, "parameters") {
                     args = parameters
                         .children_by_field_name("param", &mut parameters.walk())
-                        .map(|x| Self::get_text(x, source_code))
+                        .map(|x| (Self::get_text(x, source_code), x.start_position(), x.end_position()))
                         .collect();
                 }
 
@@ -656,8 +707,19 @@ class {} {}{}{}{}
                     if b_cursor.goto_first_child() {
                         for i in args.iter() {
                             inner_scope.add_symbol(Symbol::Variable {
-                                name: i.clone(),
+                                name: i.0.clone(),
+                                constant: false,
                                 optional_type: None,
+                                type_defined: false,
+                                file: self.file.clone(),
+                                start_position: Some(Position {
+                                    line: i.1.row as u32,
+                                    character: i.1.column as u32,
+                                }),
+                                end_position: Some(Position {
+                                    line: i.2.row as u32,
+                                    character: i.2.column as u32,
+                                }),
                             });
                         }
 
@@ -694,8 +756,17 @@ class {} {}{}{}{}
 
                 scope.add_symbol(Symbol::Function {
                     name,
-                    args,
+                    args: args.iter().map(|(x, _, _)| x.clone()).collect(),
                     returns,
+					file: self.file.clone(),
+					start_position: Some(Position {
+						line: name_node.start_position().row as u32,
+						character: name_node.start_position().column as u32,
+					}),
+					end_position: Some(Position {
+						line: name_node.end_position().row as u32,
+						character: name_node.end_position().column as u32,
+					})
                 });
             }
 
@@ -717,9 +788,11 @@ class {} {}{}{}{}
             }
 
             "const_statement" | "let_statement" => {
-                let names: Vec<String> = node
+				let start_point = node.start_position();
+
+                let names: Vec<_> = node
                     .children_by_field_name("name", &mut node.walk())
-                    .map(|x| Self::get_text(x, source_code))
+                    .map(|x| (Self::get_text(x, source_code), x.end_position()))
                     .collect();
 
                 let values: Vec<_> = node
@@ -727,39 +800,70 @@ class {} {}{}{}{}
                     .map(|x| self.get_value_type(x, source_code, scope))
                     .collect();
 
-                let optional_types: Vec<_> = node
+                let mut optional_types: Vec<_> = node
                     .children_by_field_name("type", &mut node.walk())
-                    .map(|x| self.get_value_type(x, source_code, scope))
+                    .map(|x| Self::get_text(x, source_code))
                     .collect();
+
+                if optional_types.len() == 0 && values.len() == 0 {
+                    optional_types.push("nil".to_string());
+                }
 
                 if values.len() >= names.len() {
                     for i in 0..names.len() {
                         scope.add_symbol(Symbol::Variable {
-                            name: names[i].clone(),
-                            optional_type: values[i].clone().or(
-                                if optional_types.len() == names.len() {
-                                    optional_types[i].clone()
-                                } else {
-                                    None
-                                },
-                            ),
+                            name: names[i].0.clone(),
+                            constant: node.kind() == "const_statement",
+                            optional_type: if i < optional_types.len() {
+                                Some(optional_types[i].clone())
+                            } else {
+                                values[i]
+                                    .clone()
+                                    .or(if optional_types.len() == names.len() {
+                                        Some(optional_types[i].clone())
+                                    } else {
+                                        None
+                                    })
+                            },
+                            type_defined: i < optional_types.len(),
+                            file: self.file.clone(),
+                            start_position: Some(Position {
+                                line: start_point.row as u32,
+                                character: start_point.column as u32,
+                            }),
+                            end_position: Some(Position {
+                                line: names[i].1.row as u32,
+                                character: names[i].1.column as u32,
+                            }),
                         });
                     }
                 } else {
-                    for name in names {
+                    for (name, end_point) in names {
                         scope.add_symbol(Symbol::Variable {
                             name,
+                            constant: node.kind() == "const_statement",
                             optional_type: if optional_types.len() > 0 {
-                                optional_types[0].clone()
+                                Some(optional_types[0].clone())
                             } else {
                                 None
                             },
+                            type_defined: false,
+                            file: self.file.clone(),
+                            start_position: Some(Position {
+                                line: start_point.row as u32,
+                                character: start_point.column as u32,
+                            }),
+                            end_position: Some(Position {
+                                line: end_point.row as u32,
+                                character: end_point.column as u32,
+                            }),
                         });
                     }
                 }
             }
 
             "class_definition" => {
+				let name_node = Self::get_field(node, "name");
                 let name = Self::get_field_text(node, "name", source_code);
 
                 let mut class_scope = Scope::new_disabled(node.start_byte(), node.end_byte());
@@ -802,6 +906,15 @@ class {} {}{}{}{}
                     constructor,
                     functions,
                     variables,
+					file: self.file.clone(),
+					start_position: Some(Position {
+						line: node.start_position().row as u32,
+						character: node.start_position().column as u32,
+					}),
+					end_position: Some(Position {
+						line: name_node.end_position().row as u32,
+						character: name_node.end_position().column as u32,
+					}),
                 });
             }
 
@@ -839,7 +952,18 @@ class {} {}{}{}{}
 
                     inner_scope.add_symbol(Symbol::Variable {
                         name: Self::get_field_text(node, "var", source_code),
+                        constant: false,
                         optional_type: None,
+                        type_defined: false,
+                        file: self.file.clone(),
+                        start_position: Some(Position {
+                            line: node.start_position().row as u32,
+                            character: node.start_position().column as u32,
+                        }),
+                        end_position: Some(Position {
+                            line: node.end_position().row as u32,
+                            character: node.end_position().column as u32,
+                        }),
                     });
 
                     scope.add_child_scope(inner_scope);
@@ -901,7 +1025,7 @@ class {} {}{}{}{}
             }
         }
 
-		scope_path.push(&self.global_scope);
+        scope_path.push(&self.global_scope);
 
         // remove duplicate scopes (by start,end)
         let mut seen = HashSet::new();

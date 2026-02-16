@@ -15,6 +15,18 @@ macro_rules! add_keyword {
 }
 
 #[macro_export]
+macro_rules! add_constant {
+    ($name:expr, $description:expr) => {
+        CompletionItem {
+            label: $name.to_string(),
+            kind: Some(CompletionItemKind::CONSTANT),
+            detail: Some($description.to_string()),
+            ..Default::default()
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! add_function {
     ($name:expr, $details:expr) => {
         CompletionItem {
@@ -102,6 +114,17 @@ macro_rules! add_all_type_casts {
             add_type_cast!("list", "(value) -> list"),
             add_type_cast!("List", "(value) -> list"),
             add_type_cast!("Dict", "(value) -> dict"),
+        ]
+    };
+}
+
+#[macro_export]
+macro_rules! add_all_constants {
+    () => {
+        vec![
+            add_constant!("true", "bool"),
+            add_constant!("false", "bool"),
+            add_constant!("nil", "bool"),
         ]
     };
 }
