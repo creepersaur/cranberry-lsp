@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::{
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 use tree_sitter_cranberry;
 
-use crate::language_model::{LanguageModel, Symbol};
+use crate::model::language_model::{LanguageModel, Symbol};
 
 #[allow(unused)]
 pub struct FileState {
@@ -270,7 +270,7 @@ impl FileState {
         line[start..dot_pos - 1].to_string()
     }
 
-    pub fn get_word_at_position(&self, position: &Position) -> Option<String> {
+    pub fn get_word_at_position(&self, position: &Position) -> Option<(String, Point)> {
         let byte = position_to_byte_offset_fast(
             &self.source_code,
             &self.line_starts,
@@ -306,12 +306,11 @@ impl FileState {
                 i += 1;
             }
 
-			return Some(word);
-            // return Some((word, byte_offset_to_point(
-			// 	&self.source_code,
-			// 	&self.line_starts,
-			// 	i
-			// )));
+            return Some((word, byte_offset_to_point(
+				&self.source_code,
+				&self.line_starts,
+				i
+			)));
         }
 
 		None

@@ -2,12 +2,11 @@ use language_server::CranberryLsp;
 use std::sync::Arc;
 use tower_lsp::{LspService, Server};
 
-mod file_manager;
-mod file_state;
-mod language_model;
+mod files;
 mod language_server;
-mod macros;
 mod logger;
+mod macros;
+mod model;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

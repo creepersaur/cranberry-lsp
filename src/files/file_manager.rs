@@ -1,4 +1,4 @@
-use crate::file_state::FileState;
+use crate::files::file_state::FileState;
 use log::error;
 use std::{collections::HashMap, fs, path::PathBuf};
 use tower_lsp::lsp_types::Url;
@@ -60,7 +60,9 @@ impl FileManager {
     }
 
     pub fn open_file(&mut self, url: Url, text: String) {
-        self.files.insert(url.clone(), FileState::new(text, url));
+        if !self.files.contains_key(&url) {
+			self.files.insert(url.clone(), FileState::new(text, url));
+		}
     }
 
 	#[allow(unused)]

@@ -1,9 +1,13 @@
 use crate::{
     add_all_builtin_functions, add_all_constants, add_all_keywords, add_all_type_casts,
-    add_constant, add_function, add_keyword, add_type_cast, file_manager::FileManager,
-    language_model::Symbol, logger::LspLogger,
+    add_constant, add_function, add_keyword, add_type_cast, files::file_manager::FileManager,
+    logger::LspLogger, model::format_symbols, model::get_document_symbols::get_document_symbols,
+    model::language_model::Symbol,
 };
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 use tokio::sync::RwLock;
 use tower_lsp::{
     Client, LanguageServer,
@@ -136,10 +140,14 @@ impl LanguageServer for CranberryLsp {
                     resolve_provider: Some(true),
                     ..Default::default()
                 }),
+                diagnostic_provider: Some(DiagnosticServerCapabilities::RegistrationOptions(
+                    DiagnosticRegistrationOptions::default(),
+                )),
                 definition_provider: Some(OneOf::Left(true)),
                 declaration_provider: Some(DeclarationCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -343,19 +351,44 @@ impl LanguageServer for CranberryLsp {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        Ok(Some(Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: String::from("Hello"),
-            }),
-            range: Some(Range {
-                start: params.text_document_position_params.position,
-                end: Position {
-                    line: params.text_document_position_params.position.line,
-                    character: params.text_document_position_params.position.character + 5,
-                },
-            }),
-        }))
+        let doc = params.text_document_position_params.text_document;
+        let position = params.text_document_position_params.position;
+        let mut file_manager = self.file_manager.write().await;
+
+        if let Some(file) = file_manager.get_file_mut(&doc.uri) {
+            let hover_word = file.get_word_at_position(&position);
+            let (word, start_point) = match hover_word {
+                Some(word) => word,
+                None => return Ok(None),
+            };
+
+            let mut content = word.clone();
+            for i in file.model.global_scope.flatten_symbols() {
+                if let Symbol::Class { name, .. } = i
+                    && name == &word
+                {
+                    content = format!("{}\n
+To learn about Classes in Cranberry check out the [Class Documentation](https://creepersaur.github.io/CranberryDocs/basic_topics/classes/)", format_symbols::format_class(i));
+                    break;
+                }
+            }
+
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: content,
+                }),
+                range: Some(Range {
+                    start: Position::new(
+                        start_point.row as u32,
+                        start_point.column as u32 - word.len() as u32,
+                    ),
+                    end: Position::new(start_point.row as u32, start_point.column as u32),
+                }),
+            }));
+        }
+
+        Ok(None)
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
@@ -371,8 +404,11 @@ impl LanguageServer for CranberryLsp {
                     optional_type,
                     end_position,
                     type_defined,
+                    file,
                     ..
                 } = symbol
+                    && let Some(file) = file
+                    && file == &url
                 {
                     if let Some(optional_type) = optional_type
                         && !*type_defined
@@ -409,7 +445,7 @@ impl LanguageServer for CranberryLsp {
         let mut file_manager = self.file_manager.write().await;
         if let Some(file) = file_manager.get_file_mut(&doc.uri) {
             let hover_word = file.get_word_at_position(&position);
-            let word = match hover_word {
+            let (word, _) = match hover_word {
                 Some(word) => word,
                 None => return Ok(None),
             };
@@ -440,7 +476,7 @@ impl LanguageServer for CranberryLsp {
                     }
                 }
 
-				if let Symbol::Function {
+                if let Symbol::Function {
                     name,
                     file,
                     start_position,
@@ -463,7 +499,7 @@ impl LanguageServer for CranberryLsp {
                     }
                 }
 
-				if let Symbol::Class {
+                if let Symbol::Class {
                     name,
                     file,
                     start_position,
@@ -489,5 +525,72 @@ impl LanguageServer for CranberryLsp {
         }
 
         Ok(None)
+    }
+
+    async fn diagnostic(
+        &self,
+        params: DocumentDiagnosticParams,
+    ) -> Result<DocumentDiagnosticReportResult> {
+        let mut map = HashMap::new();
+
+        let file_manager = self.file_manager.write().await;
+
+        let mut main_diagnostics = vec![];
+
+        for (uri, state) in file_manager.files.iter() {
+            let mut diagnostics = vec![];
+
+            for (range, message) in state.model.errors.iter() {
+                diagnostics.push(Diagnostic {
+                    range: range.clone(),
+                    message: message.clone(),
+                    source: Some("Cranberry LSP".to_string()),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    related_information: Some(vec![DiagnosticRelatedInformation {
+                        location: Location::new(uri.clone(), range.clone()),
+                        message: message.clone(),
+                    }]),
+                    ..Default::default()
+                })
+            }
+
+            if uri == &params.text_document.uri {
+                main_diagnostics = diagnostics.clone();
+            }
+
+            let diag_report = DocumentDiagnosticReportKind::Full(FullDocumentDiagnosticReport {
+                result_id: None,
+                items: diagnostics.clone(),
+            });
+            map.insert(uri.clone(), diag_report);
+        }
+
+        Ok(DocumentDiagnosticReportResult::Report(
+            DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                related_documents: Some(map),
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: None,
+                    items: main_diagnostics,
+                },
+            }),
+        ))
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let mut file_manager = self.file_manager.write().await;
+        let url = params.text_document.uri;
+
+        let mut doc_symbols = vec![];
+
+        if let Some(file) = file_manager.get_file_mut(&url) {
+            let symbols = &mut file.model.global_scope.symbols;
+
+            doc_symbols = get_document_symbols(url, symbols);
+        }
+
+        Ok(Some(DocumentSymbolResponse::Flat(doc_symbols)))
     }
 }
