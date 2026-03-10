@@ -364,11 +364,14 @@ impl LanguageServer for CranberryLsp {
 
             let mut content = word.clone();
             for i in file.model.global_scope.flatten_symbols() {
-                if let Symbol::Class { name, .. } = i
+                if let Symbol::Class { name, .. } = &i
                     && name == &word
                 {
                     content = format!("{}\n
-To learn about Classes in Cranberry check out the [Class Documentation](https://creepersaur.github.io/CranberryDocs/basic_topics/classes/)", format_symbols::format_class(i));
+To learn about Classes in Cranberry
+check out the [Class Documentation](https://creepersaur.github.io/CranberryDocs/basic_topics/classes/)",
+format_symbols::format_class(&i)
+);
                     break;
                 }
             }
@@ -408,10 +411,10 @@ To learn about Classes in Cranberry check out the [Class Documentation](https://
                     ..
                 } = symbol
                     && let Some(file) = file
-                    && file == &url
+                    && file == url
                 {
                     if let Some(optional_type) = optional_type
-                        && !*type_defined
+                        && !type_defined
                     {
                         if let Some(end_position) = end_position {
                             hints.push(InlayHint {
@@ -586,7 +589,7 @@ To learn about Classes in Cranberry check out the [Class Documentation](https://
         let mut doc_symbols = vec![];
 
         if let Some(file) = file_manager.get_file_mut(&url) {
-            let symbols = &mut file.model.global_scope.symbols;
+            let symbols = file.model.global_scope.flatten_symbols();
 
             doc_symbols = get_document_symbols(url, symbols);
         }

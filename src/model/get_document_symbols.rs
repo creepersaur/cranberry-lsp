@@ -2,8 +2,8 @@ use tower_lsp::lsp_types::{Location, Range, SymbolInformation, SymbolKind, Url};
 
 use crate::model::language_model::Symbol;
 
-pub fn get_document_symbols(url: Url, symbols: &mut Vec<Symbol>) -> Vec<SymbolInformation> {
-    let mut doc_symbols = vec![];
+pub fn get_document_symbols(url: Url, symbols: Vec<Symbol>) -> Vec<SymbolInformation> {
+	let mut doc_symbols = vec![];
 
     for i in symbols.iter() {
         match i {
@@ -65,8 +65,6 @@ pub fn get_document_symbols(url: Url, symbols: &mut Vec<Symbol>) -> Vec<SymbolIn
             Symbol::Class {
                 name,
                 constructor,
-                functions,
-                variables,
                 file,
                 start_position,
                 scope_end_position,
@@ -98,60 +96,6 @@ pub fn get_document_symbols(url: Url, symbols: &mut Vec<Symbol>) -> Vec<SymbolIn
                             doc_symbols.push(SymbolInformation {
                                 name: String::from("constructor"),
                                 kind: SymbolKind::CONSTRUCTOR,
-                                tags: None,
-                                #[allow(deprecated)]
-                                deprecated: None,
-                                location: Location::new(
-                                    url.clone(),
-                                    Range::new(
-                                        scope_start_position.unwrap(),
-                                        scope_end_position.unwrap(),
-                                    ),
-                                ),
-                                container_name: None,
-                            });
-                        }
-                    }
-
-                    for i in variables {
-                        if let Symbol::Variable {
-                            name,
-                            constant,
-                            start_position,
-                            end_position,
-                            ..
-                        } = i
-                        {
-                            doc_symbols.push(SymbolInformation {
-                                name: name.clone(),
-                                kind: if *constant {
-                                    SymbolKind::CONSTANT
-                                } else {
-                                    SymbolKind::VARIABLE
-                                },
-                                tags: None,
-                                #[allow(deprecated)]
-                                deprecated: None,
-                                location: Location::new(
-                                    url.clone(),
-                                    Range::new(start_position.unwrap(), end_position.unwrap()),
-                                ),
-                                container_name: None,
-                            });
-                        }
-                    }
-
-                    for i in functions {
-                        if let Symbol::Function {
-                            name,
-                            scope_start_position,
-                            scope_end_position,
-                            ..
-                        } = i
-                        {
-                            doc_symbols.push(SymbolInformation {
-                                name: name.clone(),
-                                kind: SymbolKind::FUNCTION,
                                 tags: None,
                                 #[allow(deprecated)]
                                 deprecated: None,

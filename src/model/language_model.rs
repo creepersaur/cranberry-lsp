@@ -83,11 +83,11 @@ impl Scope {
         self.children.push(scope);
     }
 
-    pub fn flatten_symbols(&mut self) -> &mut Vec<Symbol> {
-        let symbols = &mut self.symbols;
+    pub fn flatten_symbols(&mut self) -> Vec<Symbol> {
+        let mut symbols = self.symbols.clone();
 
         for i in self.children.iter_mut() {
-            symbols.append(i.flatten_symbols());
+            symbols.extend(i.flatten_symbols());
         }
 
         symbols
@@ -677,6 +677,53 @@ let my_object = {name}( ... )
         nodes
     }
 
+    pub fn evaluate_block(
+        &mut self,
+        b_cursor: &mut TreeCursor,
+        inner_scope: &mut Scope,
+        source_code: &str,
+        returns: &mut HashSet<String>,
+        args: &Vec<(String, Point, Point)>,
+    ) {
+        if b_cursor.node().kind() == "inline_block" {
+            if let Some(value) = Self::try_get_field(b_cursor.node(), "value") {
+                if let Some(ret) = self.get_value_type(value, source_code, inner_scope) {
+                    returns.insert(ret);
+                } else {
+                    returns.insert("???".to_string());
+                }
+            }
+        }
+
+        if b_cursor.goto_first_child() {
+            for i in args.iter() {
+                inner_scope.add_symbol(Symbol::Variable {
+                    name: i.0.clone(),
+                    constant: false,
+                    optional_type: None,
+                    type_defined: false,
+                    file: self.file.clone(),
+                    start_position: Some(Position {
+                        line: i.1.row as u32,
+                        character: i.1.column as u32,
+                    }),
+                    end_position: Some(Position {
+                        line: i.2.row as u32,
+                        character: i.2.column as u32,
+                    }),
+                });
+            }
+
+            loop {
+                self.evaluate_node(b_cursor.node(), b_cursor, inner_scope, source_code);
+
+                if !b_cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+
     pub fn evaluate_node<'a>(
         &mut self,
         node: Node<'a>,
@@ -733,50 +780,13 @@ let my_object = {name}( ... )
 
                     let mut inner_scope = Scope::new(start, end);
 
-                    if b_cursor.node().kind() == "inline_block" {
-                        if let Some(value) = Self::try_get_field(b_cursor.node(), "value") {
-                            if let Some(ret) =
-                                self.get_value_type(value, source_code, &mut inner_scope)
-                            {
-                                returns.insert(ret);
-                            } else {
-                                returns.insert("???".to_string());
-                            }
-                        }
-                    }
-
-                    if b_cursor.goto_first_child() {
-                        for i in args.iter() {
-                            inner_scope.add_symbol(Symbol::Variable {
-                                name: i.0.clone(),
-                                constant: false,
-                                optional_type: None,
-                                type_defined: false,
-                                file: self.file.clone(),
-                                start_position: Some(Position {
-                                    line: i.1.row as u32,
-                                    character: i.1.column as u32,
-                                }),
-                                end_position: Some(Position {
-                                    line: i.2.row as u32,
-                                    character: i.2.column as u32,
-                                }),
-                            });
-                        }
-
-                        loop {
-                            self.evaluate_node(
-                                b_cursor.node(),
-                                &mut b_cursor,
-                                &mut inner_scope,
-                                source_code,
-                            );
-
-                            if !b_cursor.goto_next_sibling() {
-                                break;
-                            }
-                        }
-                    }
+                    self.evaluate_block(
+                        &mut b_cursor,
+                        &mut inner_scope,
+                        source_code,
+                        &mut returns,
+                        &args,
+                    );
 
                     let return_statements = Self::get_kind_descendants(block, "return_statement");
 
@@ -1029,23 +1039,41 @@ let my_object = {name}( ... )
 
             "for_statement" => {
                 if let Some(block) = Self::try_get_field(node, "block") {
-                    let mut inner_scope = Scope::new(block.start_byte(), block.end_byte());
+					let mut b_cursor = block.walk();
+					
+                    let start = b_cursor.node().start_byte();
+                    let end = b_cursor.node().end_byte();
+					
+                    if !b_cursor.goto_first_child() {
+						return;
+                    }
 
+					let mut inner_scope = Scope::new(start, end);
+
+                    let var = Self::get_field(node, "var");
                     inner_scope.add_symbol(Symbol::Variable {
-                        name: Self::get_field_text(node, "var", source_code),
+                        name: Self::get_text(var, source_code),
                         constant: false,
                         optional_type: None,
                         type_defined: false,
                         file: self.file.clone(),
                         start_position: Some(Position {
-                            line: node.start_position().row as u32,
-                            character: node.start_position().column as u32,
+                            line: var.start_position().row as u32,
+                            character: var.start_position().column as u32,
                         }),
                         end_position: Some(Position {
-                            line: node.end_position().row as u32,
-                            character: node.end_position().column as u32,
+                            line: var.end_position().row as u32,
+                            character: var.end_position().column as u32,
                         }),
                     });
+
+                    self.evaluate_block(
+                        &mut b_cursor,
+                        &mut inner_scope,
+                        source_code,
+                        &mut HashSet::new(),
+                        &mut vec![],
+                    );
 
                     scope.add_child_scope(inner_scope);
                 }
