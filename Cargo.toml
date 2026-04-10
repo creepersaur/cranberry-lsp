@@ -13,6 +13,6 @@ tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 anyhow = "1"  # For error handling
 tree-sitter = "0.25"
-tree-sitter-cranberry = { path = "/Users/vivekmathur/tree-sitter-cranberry" }
+tree-sitter-cranberry = { path = "D:/Coding/Rust/tree-sitter-cranberry" }
 log = "0.4"
 env_logger = "0.10"
