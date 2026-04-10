@@ -10,7 +10,7 @@ pub fn format_class(i: &Symbol) -> String {
     } = i
     {
         return format!(
-            r#"```cranberry
+            r#"```ignite
 class {name} {{
 	{}{}{}
 }}

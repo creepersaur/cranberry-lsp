@@ -83,10 +83,10 @@ impl Scope {
         self.children.push(scope);
     }
 
-    pub fn flatten_symbols(&mut self) -> Vec<Symbol> {
+    pub fn flatten_symbols(&self) -> Vec<Symbol> {
         let mut symbols = self.symbols.clone();
 
-        for i in self.children.iter_mut() {
+        for i in self.children.iter() {
             symbols.extend(i.flatten_symbols());
         }
 
@@ -97,6 +97,7 @@ pub struct LanguageModel {
     pub global_scope: Scope,
     pub file: Option<Url>,
     pub errors: Vec<(Range, String)>,
+	// pub identifiers: Vec<(std::ops::Range<usize>, String)>,
     source_code: String,
 }
 
@@ -106,6 +107,7 @@ impl LanguageModel {
             global_scope: Scope::default(),
             source_code: String::new(),
             errors: vec![],
+            // identifiers: vec![],
             file,
         }
     }
@@ -114,6 +116,7 @@ impl LanguageModel {
         self.global_scope.children.clear();
         self.global_scope.symbols.clear();
         self.errors.clear();
+		// self.identifiers.clear();
     }
 
     pub fn build_model(&mut self, tree: &Tree, source_code: &str) {
@@ -175,7 +178,7 @@ impl LanguageModel {
                                     Documentation::MarkupContent(MarkupContent {
                                         kind: MarkupKind::Markdown,
                                         value: format!(
-                                            "```cranberry\n({}) -> nil\n```",
+                                            "```ignite\n({}) -> nil\n```",
                                             args.join(", ")
                                         ),
                                     })
@@ -183,7 +186,7 @@ impl LanguageModel {
                                     Documentation::MarkupContent(MarkupContent {
                                         kind: MarkupKind::Markdown,
                                         value: format!(
-                                            "```cranberry\n({}) -> {}\n```",
+                                            "```ignite\n({}) -> {}\n```",
                                             args.join(", "),
                                             returns
                                                 .iter()
@@ -211,7 +214,7 @@ impl LanguageModel {
                                 data: Some(json!({
                                     "doc": format!(
                                         r#"Construct this class using `{name}({})`
-```cranberry
+```ignite
 let my_object = {name}( ... )
 ```
 
@@ -266,13 +269,13 @@ let my_object = {name}( ... )
                     documentation: Some(if returns.is_empty() {
                         Documentation::MarkupContent(MarkupContent {
                             kind: MarkupKind::Markdown,
-                            value: format!("```cranberry\n({}) -> nil\n```", args.join(", ")),
+                            value: format!("```ignite\n({}) -> nil\n```", args.join(", ")),
                         })
                     } else {
                         Documentation::MarkupContent(MarkupContent {
                             kind: MarkupKind::Markdown,
                             value: format!(
-                                "```cranberry\n({}) -> {}\n```",
+                                "```ignite\n({}) -> {}\n```",
                                 args.join(", "),
                                 returns
                                     .iter()
@@ -407,6 +410,11 @@ let my_object = {name}( ... )
             "boolean" => Some("bool".to_string()),
             "nil" => Some("nil".to_string()),
 
+			"dictionary_expression" => Some("dict".to_string()),
+			"tuple_expression" => Some("tuple".to_string()),
+			"list_expression" => Some("list".to_string()),
+			"range_expression" => Some("range".to_string()),
+
             "call_expression" => {
                 let name_node = node.child_by_field_name("name").unwrap();
                 let mut cursor = name_node.walk();
@@ -416,29 +424,25 @@ let my_object = {name}( ... )
                     self.get_value_type(arg, source_code, scope);
                 }
 
-                if cursor.node().kind() == "pascal_case_identifier" {
-                    Some(Self::get_text(name_node, source_code))
-                } else {
-                    let func_name = Self::get_text(name_node, source_code);
+                let func_name = Self::get_text(name_node, source_code);
 
-                    let scope_path = self.accumulate_node_scope(node, scope);
+                let scope_path = self.accumulate_node_scope(node, scope);
 
-                    for scope in scope_path.iter() {
-                        for i in scope.symbols.iter() {
-                            if let Symbol::Function { name, returns, .. } = i
-                                && name == &func_name
-                            {
-                                if returns.is_empty() {
-                                    return Some("nil".to_string());
-                                } else {
-                                    return Some(returns.iter().collect::<Vec<_>>()[0].clone());
-                                }
+                for scope in scope_path.iter() {
+                    for i in scope.symbols.iter() {
+                        if let Symbol::Function { name, returns, .. } = i
+                            && name == &func_name
+                        {
+                            if returns.is_empty() {
+                                return Some("nil".to_string());
+                            } else {
+                                return Some(returns.iter().collect::<Vec<_>>()[0].clone());
                             }
                         }
                     }
-
-                    None
                 }
+
+                None
             }
             "member_expression" => {
                 let object = Self::get_field(node, "object");
@@ -472,7 +476,6 @@ let my_object = {name}( ... )
                             for func in functions {
                                 if let Symbol::Function {
                                     name,
-                                    args,
                                     returns,
                                     ..
                                 } = func
@@ -485,19 +488,7 @@ let my_object = {name}( ... )
                                             Some(returns.iter().collect::<Vec<_>>()[0].clone())
                                         };
                                     } else {
-                                        return Some(format!(
-                                            "function: ({}) -> {}",
-                                            args.join(", "),
-                                            if returns.is_empty() {
-                                                "nil".to_string()
-                                            } else {
-                                                returns
-                                                    .iter()
-                                                    .map(|x| x.clone())
-                                                    .collect::<Vec<_>>()
-                                                    .join(" | ")
-                                            }
-                                        ));
+                                        return Some("function".to_string());
                                     }
                                 }
                             }
@@ -632,30 +623,42 @@ let my_object = {name}( ... )
                 cursor.goto_first_child();
 
                 let text = Self::get_text(node, source_code);
-                if cursor.node().kind() == "pascal_case_identifier" {
-                    Some(text)
-                } else {
-                    let scope_path = self.accumulate_node_scope(node, scope);
 
-                    for scope in scope_path {
-                        for i in scope.symbols.iter() {
-                            if let Symbol::Variable {
-                                name,
-                                optional_type,
-                                ..
-                            } = i
-                                && name == &text
-                            {
-                                return optional_type.clone();
-                            } else if let Symbol::Function { name, .. } = i
-                                && name == &text
-                            {
-                                return Some("function".to_string());
-                            }
+                let scope_path = self.accumulate_node_scope(node, scope);
+
+                let mut type_string = None;
+                // let mut symbol_type = None;
+
+                for scope in scope_path {
+                    for i in scope.symbols.iter() {
+                        if let Symbol::Variable {
+                            name,
+                            optional_type,
+                            ..
+                        } = i
+                            && name == &text
+                        {
+							type_string = optional_type.clone();
+							// symbol_type = Some("variable");
+                        } else if let Symbol::Function { name, .. } = i
+                            && name == &text
+                        {
+							type_string = Some("function".to_string());
+							// symbol_type = Some("function");
+                        } else if let Symbol::Class { name, .. } = i
+                            && name == &text
+                        {
+							type_string = Some(name.clone());
+							// symbol_type = Some("class");
                         }
                     }
-                    None
                 }
+
+				// if let Some(x) = &symbol_type {
+				// 	self.identifiers.push((node.byte_range(), x.to_string()));
+				// }
+
+                type_string
             }
 
             _ => None,
@@ -1039,16 +1042,16 @@ let my_object = {name}( ... )
 
             "for_statement" => {
                 if let Some(block) = Self::try_get_field(node, "block") {
-					let mut b_cursor = block.walk();
-					
+                    let mut b_cursor = block.walk();
+
                     let start = b_cursor.node().start_byte();
                     let end = b_cursor.node().end_byte();
-					
+
                     if !b_cursor.goto_first_child() {
-						return;
+                        return;
                     }
 
-					let mut inner_scope = Scope::new(start, end);
+                    let mut inner_scope = Scope::new(start, end);
 
                     let var = Self::get_field(node, "var");
                     inner_scope.add_symbol(Symbol::Variable {

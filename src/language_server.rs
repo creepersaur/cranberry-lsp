@@ -4,10 +4,7 @@ use crate::{
     logger::LspLogger, model::format_symbols, model::get_document_symbols::get_document_symbols,
     model::language_model::Symbol,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::{collections::HashSet, path::PathBuf};
 use tokio::sync::RwLock;
 use tower_lsp::{
     Client, LanguageServer,
@@ -18,13 +15,13 @@ use tower_lsp::{
     },
 };
 
-pub struct CranberryLsp {
+pub struct IgniteLsp {
     client: Client,
     pub file_manager: RwLock<FileManager>,
     pub basic_completions: Vec<CompletionItem>,
 }
 
-impl CranberryLsp {
+impl IgniteLsp {
     pub fn new(client: Client) -> Self {
         Self {
             client,
@@ -70,10 +67,10 @@ impl CranberryLsp {
 }
 
 #[tower_lsp::async_trait]
-impl LanguageServer for CranberryLsp {
+impl LanguageServer for IgniteLsp {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         self.client
-            .log_message(MessageType::INFO, "Initialized cranberry-lsp")
+            .log_message(MessageType::INFO, "Initialized ignite-lsp")
             .await;
 
         log::set_boxed_logger(Box::new(LspLogger {
@@ -103,7 +100,7 @@ impl LanguageServer for CranberryLsp {
                             filters: vec![FileOperationFilter {
                                 scheme: Some("file".to_string()),
                                 pattern: FileOperationPattern {
-                                    glob: "**/*.cb".to_string(),
+                                    glob: "**/*.ign".to_string(),
                                     matches: None,
                                     options: None,
                                 },
@@ -148,10 +145,32 @@ impl LanguageServer for CranberryLsp {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                // semantic_tokens_provider: Some(
+                //     SemanticTokensServerCapabilities::SemanticTokensOptions(
+                //         SemanticTokensOptions {
+                //             work_done_progress_options: WorkDoneProgressOptions {
+                //                 work_done_progress: None,
+                //             },
+                //             legend: SemanticTokensLegend {
+                //                 token_types: vec![
+                //                     SemanticTokenType::VARIABLE, // Index 0
+                //                     SemanticTokenType::FUNCTION, // Index 1
+                //                     SemanticTokenType::CLASS,    // Index 2
+                //                 ],
+                //                 token_modifiers: vec![
+                //                     // SemanticTokenModifier::DECLARATION,
+                //                     // SemanticTokenModifier::STATIC,
+                //                 ],
+                //             },
+                //             range: Some(false),
+                //             full: Some(SemanticTokensFullOptions::Bool(true)),
+                //         },
+                //     ),
+                // ),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
-                name: "cranberry-lsp".to_string(),
+                name: "ignite-lsp".to_string(),
                 version: Some("0.1.0".to_string()),
             }),
         })
@@ -166,7 +185,7 @@ impl LanguageServer for CranberryLsp {
             .log_message(
                 MessageType::INFO,
                 format!(
-                    "[cranberry-lsp] File Opened: {}",
+                    "[ignite-lsp] File Opened: {}",
                     PathBuf::from(params.text_document.uri.path())
                         .to_str()
                         .unwrap()
@@ -185,7 +204,7 @@ impl LanguageServer for CranberryLsp {
             .log_message(
                 MessageType::INFO,
                 format!(
-                    "[cranberry-lsp] File Closed: {}",
+                    "[ignite-lsp] File Closed: {}",
                     PathBuf::from(params.text_document.uri.path())
                         .to_str()
                         .unwrap()
@@ -207,7 +226,7 @@ impl LanguageServer for CranberryLsp {
                 .log_message(
                     MessageType::INFO,
                     format!(
-                        "[cranberry-lsp] File Deleted: {}",
+                        "[ignite-lsp] File Deleted: {}",
                         PathBuf::from(&file.uri).to_str().unwrap()
                     ),
                 )
@@ -222,7 +241,7 @@ impl LanguageServer for CranberryLsp {
             .log_message(
                 MessageType::INFO,
                 format!(
-                    "[cranberry-lsp] File Saved: {}",
+                    "[ignite-lsp] File Saved: {}",
                     PathBuf::from(params.text_document.uri.path())
                         .to_str()
                         .unwrap()
@@ -532,51 +551,56 @@ format_symbols::format_class(&i)
 
     async fn diagnostic(
         &self,
-        params: DocumentDiagnosticParams,
+        _params: DocumentDiagnosticParams,
     ) -> Result<DocumentDiagnosticReportResult> {
-        let mut map = HashMap::new();
-
-        let file_manager = self.file_manager.write().await;
-
-        let mut main_diagnostics = vec![];
-
-        for (uri, state) in file_manager.files.iter() {
-            let mut diagnostics = vec![];
-
-            for (range, message) in state.model.errors.iter() {
-                diagnostics.push(Diagnostic {
-                    range: range.clone(),
-                    message: message.clone(),
-                    source: Some("Cranberry LSP".to_string()),
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    related_information: Some(vec![DiagnosticRelatedInformation {
-                        location: Location::new(uri.clone(), range.clone()),
-                        message: message.clone(),
-                    }]),
-                    ..Default::default()
-                })
-            }
-
-            if uri == &params.text_document.uri {
-                main_diagnostics = diagnostics.clone();
-            }
-
-            let diag_report = DocumentDiagnosticReportKind::Full(FullDocumentDiagnosticReport {
-                result_id: None,
-                items: diagnostics.clone(),
-            });
-            map.insert(uri.clone(), diag_report);
-        }
-
-        Ok(DocumentDiagnosticReportResult::Report(
-            DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-                related_documents: Some(map),
-                full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                    result_id: None,
-                    items: main_diagnostics,
-                },
-            }),
+        Ok(DocumentDiagnosticReportResult::Partial(
+            DocumentDiagnosticReportPartialResult {
+                related_documents: None,
+            },
         ))
+        // let mut map = HashMap::new();
+
+        // let file_manager = self.file_manager.write().await;
+
+        // let mut main_diagnostics = vec![];
+
+        // for (uri, state) in file_manager.files.iter() {
+        //     let mut diagnostics = vec![];
+
+        //     for (range, message) in state.model.errors.iter() {
+        //         diagnostics.push(Diagnostic {
+        //             range: range.clone(),
+        //             message: message.clone(),
+        //             source: Some("Cranberry LSP".to_string()),
+        //             severity: Some(DiagnosticSeverity::ERROR),
+        //             related_information: Some(vec![DiagnosticRelatedInformation {
+        //                 location: Location::new(uri.clone(), range.clone()),
+        //                 message: message.clone(),
+        //             }]),
+        //             ..Default::default()
+        //         })
+        //     }
+
+        //     if uri == &params.text_document.uri {
+        //         main_diagnostics = diagnostics.clone();
+        //     }
+
+        //     let diag_report = DocumentDiagnosticReportKind::Full(FullDocumentDiagnosticReport {
+        //         result_id: None,
+        //         items: diagnostics.clone(),
+        //     });
+        //     map.insert(uri.clone(), diag_report);
+        // }
+
+        // Ok(DocumentDiagnosticReportResult::Report(
+        //     DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+        //         related_documents: Some(map),
+        //         full_document_diagnostic_report: FullDocumentDiagnosticReport {
+        //             result_id: None,
+        //             items: main_diagnostics,
+        //         },
+        //     }),
+        // ))
     }
 
     async fn document_symbol(
@@ -596,4 +620,63 @@ format_symbols::format_class(&i)
 
         Ok(Some(DocumentSymbolResponse::Flat(doc_symbols)))
     }
+
+	/*
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let file_manager = self.file_manager.write().await;
+        let url = params.text_document.uri;
+
+        let mut data = vec![];
+        let mut last_line = 0;
+        let mut last_start = 0;
+
+        if let Some(file) = file_manager.get_file(&url) {
+			let tokens = file.get_tokens_recursive();
+
+            for tok in tokens {
+                if tok.kind == "identifier" {
+                    let query = file
+                        .model
+                        .identifiers
+                        .iter()
+                        .find(|(range, _)| *range == tok.range);
+
+                    let token_type = match query {
+                        Some((_, type_str)) if type_str == "class" => 2,
+                        Some((_, type_str)) if type_str == "function" => 1,
+                        Some((_, type_str)) if type_str == "variable" => 0,
+
+						_ => continue
+                    };
+
+                    let delta_line = tok.row - last_line;
+                    let delta_start = if delta_line == 0 {
+                        tok.col - last_start
+                    } else {
+                        tok.col
+                    };
+
+                    data.push(SemanticToken {
+                        delta_line: delta_line as u32,
+                        delta_start: delta_start as u32,
+                        length: tok.length as u32,
+                        token_type,
+                        token_modifiers_bitset: 0,
+                    });
+
+                    last_line = tok.row;
+                    last_start = tok.col;
+                }
+            }
+        }
+
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data,
+        })))
+    }
+	*/
 }

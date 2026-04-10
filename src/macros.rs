@@ -5,10 +5,6 @@ macro_rules! add_keyword {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
             detail: Some($description.to_string()),
-            // label_details: Some(CompletionItemLabelDetails {
-            // 	detail: None,
-            // 	description: Some($description.to_string()),
-            // }),
             ..Default::default()
         }
     };
@@ -51,10 +47,6 @@ macro_rules! add_type_cast {
             label: $name.to_string(),
             kind: Some(CompletionItemKind::CLASS),
             detail: Some($details.to_string()),
-            // label_details: Some(CompletionItemLabelDetails {
-            // 	detail: Some($details.to_string()),
-            // 	description: None,
-            // }),
             insert_text: Some(format!("{}($0)", $name)),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
