@@ -1,4 +1,4 @@
-use language_server::CranberryLsp;
+use language_server::IgniteLsp;
 use std::sync::Arc;
 use tower_lsp::{LspService, Server};
 
@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let create_lsp = |client| Arc::new(CranberryLsp::new(client));
+    let create_lsp = |client| Arc::new(IgniteLsp::new(client));
     let (service, socket) = LspService::new(create_lsp);
     Server::new(stdin, stdout, socket).serve(service).await;
     Ok(())

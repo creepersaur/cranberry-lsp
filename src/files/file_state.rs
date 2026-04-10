@@ -287,10 +287,10 @@ impl FileState {
 
             loop {
                 i -= 1;
-				if PUNCTUATION.contains(chars[i]) {
-					i += 1;
-					break;
-				}
+                if PUNCTUATION.contains(chars[i]) {
+                    i += 1;
+                    break;
+                }
                 if i == 0 {
                     break;
                 }
@@ -306,16 +306,52 @@ impl FileState {
                 i += 1;
             }
 
-            return Some((word, byte_offset_to_point(
-				&self.source_code,
-				&self.line_starts,
-				i
-			)));
+            return Some((
+                word,
+                byte_offset_to_point(&self.source_code, &self.line_starts, i),
+            ));
         }
 
-		None
+        None
     }
+
+    // pub fn get_tokens_recursive(&self) -> Vec<Token> {
+    //     let mut cursor = self.tree.walk();
+    //     let tokens = recurse_children_tokens(&self.source_code, &mut cursor);
+
+    //     tokens
+    // }
 }
+
+// pub struct Token {
+// 	pub range: std::ops::Range<usize>,
+//     // pub text: String,
+//     pub kind: String,
+//     pub row: usize,
+//     pub col: usize,
+//     pub length: usize,
+// }
+
+// pub fn recurse_children_tokens(source: &str, cursor: &mut TreeCursor) -> Vec<Token> {
+//     let node = cursor.node();
+//     let mut tokens = vec![Token {
+// 		range: node.byte_range(),
+// 		// text: source[node.byte_range()].to_string(),
+//         kind: node.kind().to_string(),
+//         row: node.start_position().row,
+//         col: node.start_position().column,
+//         length: node.byte_range().len(),
+//     }];
+
+//     let mut node_cursor = cursor.node().walk();
+//     let children = cursor.node().children(&mut node_cursor);
+
+//     for i in children {
+//         tokens.extend(recurse_children_tokens(source, &mut i.walk()));
+//     }
+
+//     tokens
+// }
 
 pub fn compute_line_starts(text: &str) -> Vec<usize> {
     let mut starts = Vec::with_capacity(text.len() / 40); // heuristic
